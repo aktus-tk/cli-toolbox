@@ -8,32 +8,36 @@ set -u
 TB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 . "$TB_ROOT/lib/common.sh"
+# shellcheck source=lib/providers.sh
+. "$TB_ROOT/lib/providers.sh"
 # shellcheck source=lib/installers.sh
 . "$TB_ROOT/lib/installers.sh"
 
 usage() {
     cat <<'EOF'
-cli-toolbox — idempotent installer for cloud/ops CLIs
+cli-toolbox.sh — idempotent installer for cloud/ops CLIs
 
 Usage:
-  cli-toolbox install [CLI...]   converge CLIs to official stable-latest (install or update)
-  cli-toolbox doctor             check environment and installed CLIs
-  cli-toolbox list [CLI...]      show status table (CLI, status, current, latest, path, state)
-  cli-toolbox help               show this help
+  cli-toolbox.sh install [CLI...]   converge CLIs to official stable-latest (install or update)
+  cli-toolbox.sh doctor             check environment and installed CLIs
+  cli-toolbox.sh list [CLI...]      show status table (CLI, status, current, latest, path, provider, state)
+  cli-toolbox.sh help               show this help
 
 Standard set (used when `install` is run without arguments):
-  gh glow coscli uv tccli pipx aws gcloud
+  uv gh glow coscli tccli aws gcloud az
 
-Recognized but unsupported:
-  az                no self-contained non-root binary (pipx/venv only, ~1GB, tarball needs Python 3.14)
-  awst gcloudt tcclit   no release binaries in cloud-cli (bash wrappers requiring native CLIs + tc-assume)
+Optional wrappers (from cloud-cli repo):
+  awst gcloudt tcclit
 
 Environment:
-  CLOUD_TOOLBOX_HOME      install root (default: ~/.cloud-toolbox)
-  CLOUD_TOOLBOX_API_BASE  GitHub API base (default: https://api.github.com)
-  CLOUD_TOOLBOX_PYPI_BASE PyPI JSON base (default: https://pypi.org)
-  CLOUD_TOOLBOX_CURL      curl command override (used by tests)
-  GITHUB_TOKEN            optional GitHub token to avoid API rate limits (never printed)
+  CLOUD_TOOLBOX_HOME        install root (default: ~/.cloud-toolbox)
+  CLOUD_TOOLBOX_API_BASE    GitHub API base (default: https://api.github.com)
+  CLOUD_TOOLBOX_PYPI_BASE   PyPI JSON base (default: https://pypi.org)
+  CLOUD_TOOLBOX_UV_INSTALL_URL  uv standalone installer URL (default: https://astral.sh/uv/install.sh)
+  CLOUD_TOOLBOX_CURL        curl command override (used by tests)
+  CLOUD_CLI_REPO            cloud-cli repo for wrappers (default: ~/github/aktus-tk/cloud-cli)
+  UV_TOOL_BIN_DIR           uv tool executable dir (default: ~/.local/bin)
+  GITHUB_TOKEN              optional GitHub token to avoid API rate limits (never printed)
 EOF
 }
 
@@ -64,15 +68,8 @@ cmd_install() {
 
     local installed=0 updated=0 unchanged=0 failed=0
     local -a failed_names=()
-    local state detail reason
+    local state detail
     for name in "${clis[@]}"; do
-        if ! is_supported "$name"; then
-            reason=$(unsupported_reason "$name")
-            printf '%-10s %-11s %s\n' "$name" "unsupported" "$reason"
-            failed=$((failed + 1))
-            failed_names+=("$name")
-            continue
-        fi
         # Called directly (not via $(...)) so make_tempdir's cleanup registry
         # lives in this process and the EXIT trap removes temp dirs.
         run_installer "$name"
@@ -138,6 +135,12 @@ doctor_config() {
                 what='$HOME/.tccli or TENCENTCLOUD_* env'
             fi
             ;;
+        az)
+            if [ -n "${AZURE_CONFIG_DIR:-}" ] || [ -d "$HOME/.azure" ]; then
+                found=yes
+                what="AZURE_CONFIG_DIR/~/.azure"
+            fi
+            ;;
         *)
             printf 'OK   %-10s config: n/a\n' "$name"
             return 0
@@ -159,7 +162,7 @@ doctor_one() {
     fi
     resolved=$(resolve_path "$name") || resolved=""
     if [ -z "$resolved" ]; then
-        printf 'ERROR %-10s not found on PATH — install with: cli-toolbox install %s\n' "$name" "$name"
+        printf 'ERROR %-10s not found on PATH — install with: cli-toolbox.sh install %s\n' "$name" "$name"
         return 1
     fi
     [ -x "$resolved" ] && exe="yes"
@@ -177,11 +180,20 @@ doctor_one() {
         printf 'WARN %-10s another same-name CLI earlier in PATH shadows the managed binary\n' "$name"
     fi
     case "$name" in
-        tccli | pipx)
-            if cmd_exists python3; then
-                printf 'OK   %-10s runtime python3 present\n' "$name"
+        tccli)
+            if uv_tool_has tccli; then
+                printf 'OK   %-10s managed by uv tool\n' "$name"
+            elif cmd_exists uv; then
+                printf 'WARN %-10s not yet installed via uv tool\n' "$name"
             else
-                printf 'ERROR %-10s runtime python3 missing\n' "$name"
+                printf 'WARN %-10s uv not found (required for tccli)\n' "$name"
+            fi
+            ;;
+        uv)
+            if cmd_exists uv; then
+                printf 'OK   %-10s uv present\n' "$name"
+            else
+                printf 'ERROR %-10s uv missing\n' "$name"
                 r=1
             fi
             ;;
@@ -206,6 +218,16 @@ cmd_doctor() {
         warns=$((warns + 1))
         printf 'WARN PATH: %s/bin is not on PATH\n' "$CLOUD_TOOLBOX_HOME"
         printf '     add: export PATH="%s/bin:$PATH"\n' "$CLOUD_TOOLBOX_HOME"
+    fi
+
+    local tool_bin
+    tool_bin=$(uv_tool_bin_dir)
+    if printf ':%s:' "$PATH" | grep -Fq ":${tool_bin}:"; then
+        printf 'OK   PATH: %s is on PATH (uv tool binaries)\n' "$tool_bin"
+    else
+        warns=$((warns + 1))
+        printf 'WARN PATH: %s is not on PATH (needed for uv-managed tccli)\n' "$tool_bin"
+        printf '     add: export PATH="%s:$PATH"\n' "$tool_bin"
     fi
 
     local broken
@@ -234,91 +256,24 @@ cmd_doctor() {
 # list
 # ---------------------------------------------------------------------------
 
-# list_latest <cli>: latest stable version or "?" when the network fails.
-list_latest() {
-    local name="$1" body ver=""
-    case "$name" in
-        gh | glow | coscli | uv)
-            body=$(github_release_json "$(list_repo "$name")" 2>/dev/null) || body=""
-            if [ -n "$body" ]; then
-                ver=$(github_version_from_json "$body" 2>/dev/null)
-            fi
-            ;;
-        tccli | pipx)
-            ver=$(get_latest_version_pypi "$name" 2>/dev/null)
-            ;;
-        aws)
-            ver=$(http_get "https://awscli.amazonaws.com/v2/version.txt" 2>/dev/null | tr -d '[:space:]')
-            ;;
-        gcloud)
-            body=$(http_get "https://dl.google.com/dl/cloudsdk/channels/rapid/components-2.json" 2>/dev/null)
-            ver=$(printf '%s\n' "$body" \
-                | grep -o '"version"[[:space:]]*:[[:space:]]*"[0-9][^"]*"' \
-                | head -1 \
-                | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][^"]*\)".*/\1/')
-            ;;
-    esac
-    if [ -z "$ver" ]; then
-        log_warn "list: could not fetch latest version for ${name} (network issue); showing '?'"
-        printf '?\n'
-        return 0
-    fi
-    printf '%s\n' "$ver"
-    return 0
-}
-
-list_repo() {
-    case "$1" in
-        gh) printf '%s' "cli/cli" ;;
-        glow) printf '%s' "charmbracelet/glow" ;;
-        coscli) printf '%s' "tencentyun/coscli" ;;
-        uv) printf '%s' "astral-sh/uv" ;;
-    esac
-}
-
 list_one() {
     local name="$1"
-    local current="" latest="" path="" managed="no" state="" status="missing"
-    if is_supported "$name"; then
-        latest=$(list_latest "$name")
-        if [ -e "$CLOUD_TOOLBOX_HOME/bin/$name" ] || [ -L "$CLOUD_TOOLBOX_HOME/bin/$name" ]; then
-            managed="yes"
-            status="managed"
-            path="$CLOUD_TOOLBOX_HOME/bin/$name"
-            current=$(get_installed_version "$name")
-        else
-            path=$(resolve_path "$name") || path=""
-            if [ -n "$path" ]; then
-                status="system"
-                current=$(_parse_version "$name" "$path")
-            fi
-        fi
-        if [ "$latest" = "?" ]; then
-            state="unknown"
-        elif [ -z "$current" ]; then
-            state="not-installed"
-        elif [ "$current" = "$latest" ]; then
-            state="unchanged"
-        elif version_gt "$latest" "$current"; then
-            state="update-available"
-        else
-            state="unknown"
-        fi
-        printf '%-10s %-12s %-14s %-14s %-30s %-8s %s\n' \
-            "$name" "$status" "${current:--}" "${latest:--}" "${path:--}" "$managed" "$state"
-    else
-        printf '%-10s %-12s %-14s %-14s %-30s %-8s %s (%s)\n' \
-            "$name" "unsupported" "-" "-" "-" "-" "unsupported" "$(unsupported_reason "$name")"
-    fi
+    inspect_cli "$name" || true
+    format_list_row "$name" \
+        "${TB_LIST_STATUS}" \
+        "${TB_LIST_CURRENT:--}" \
+        "${TB_LIST_LATEST:--}" \
+        "${TB_LIST_PATH:--}" \
+        "${TB_LIST_PROVIDER}" \
+        "${TB_LIST_STATE}"
 }
 
 cmd_list() {
-    local clis=()
+    local clis=() name="" rows=""
     if [ $# -eq 0 ]; then
-        clis=("${SUPPORTED_CLIS[@]}" "${UNSUPPORTED_CLIS[@]}")
+        clis=("${SUPPORTED_CLIS[@]}")
     else
         clis=("$@")
-        local name
         for name in "${clis[@]}"; do
             if ! is_known_cli "$name"; then
                 log_error "unknown CLI: $name (supported: ${SUPPORTED_CLIS[*]})"
@@ -326,12 +281,11 @@ cmd_list() {
             fi
         done
     fi
-    printf '%-10s %-12s %-14s %-14s %-30s %-8s %s\n' \
-        "CLI" "STATUS" "CURRENT" "LATEST" "PATH" "MANAGED" "STATE"
-    local name
     for name in "${clis[@]}"; do
-        list_one "$name"
+        rows+="$(list_one "$name")"
+        rows+=$'\n'
     done
+    print_list_table "$rows"
     return 0
 }
 

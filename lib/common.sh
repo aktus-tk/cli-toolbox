@@ -107,6 +107,47 @@ version_gt() {
     return 1
 }
 
+# _parse_version <cli> <path>: run the binary at path and extract the version.
+_parse_version() {
+    local cli="$1" path="$2" out=""
+    case "$cli" in
+        gh)
+            out=$("$path" --version 2>/dev/null | sed -n 's/.*gh version \([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        glow)
+            out=$("$path" --version 2>/dev/null | sed -n 's/.*glow version \([0-9][^ ]*\).*/\1/p' | head -1)
+            if [ -z "$out" ]; then
+                out=$("$path" --version 2>/dev/null | grep -i 'glow version' | head -1 \
+                    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+                    | sed 's/^glow[[:space:]][[:space:]]*version[[:space:]][[:space:]]*//')
+            fi
+            ;;
+        coscli)
+            out=$("$path" --version 2>/dev/null | sed -n 's/.*coscli version v\?\([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        uv)
+            out=$("$path" --version 2>/dev/null | sed -n 's/.*uv \([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        tccli)
+            out=$("$path" --version 2>/dev/null | head -1 | tr -d '[:space:]')
+            ;;
+        aws)
+            out=$("$path" --version 2>&1 | sed -n 's/.*aws-cli\/\([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        gcloud)
+            out=$("$path" version 2>/dev/null | sed -n 's/.*Google Cloud SDK \([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        az)
+            out=$("$path" version 2>/dev/null | sed -n 's/.*azure-cli \([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        awst | gcloudt | tcclit)
+            out="wrapper"
+            ;;
+    esac
+    out=$(normalize_version "$out")
+    printf '%s\n' "$out"
+}
+
 # ---------------------------------------------------------------------------
 # download helpers (curl; overridable via CLOUD_TOOLBOX_CURL)
 # ---------------------------------------------------------------------------
