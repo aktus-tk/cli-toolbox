@@ -1,0 +1,370 @@
+#!/usr/bin/env bash
+# cli-toolbox — idempotent installer for cloud/ops CLIs (terraform-apply style)
+#
+# States: not installed -> install; old -> update; stable-latest -> unchanged;
+# failure -> keep existing good binary; unmanaged CLI -> never deleted.
+set -u
+
+TB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+. "$TB_ROOT/lib/common.sh"
+# shellcheck source=lib/installers.sh
+. "$TB_ROOT/lib/installers.sh"
+
+usage() {
+    cat <<'EOF'
+cli-toolbox — idempotent installer for cloud/ops CLIs
+
+Usage:
+  cli-toolbox install [CLI...]   converge CLIs to official stable-latest (install or update)
+  cli-toolbox doctor             check environment and installed CLIs
+  cli-toolbox list [CLI...]      show status table (CLI, status, current, latest, path, state)
+  cli-toolbox help               show this help
+
+Standard set (used when `install` is run without arguments):
+  gh glow coscli uv tccli pipx aws gcloud
+
+Recognized but unsupported:
+  az                no self-contained non-root binary (pipx/venv only, ~1GB, tarball needs Python 3.14)
+  awst gcloudt tcclit   no release binaries in cloud-cli (bash wrappers requiring native CLIs + tc-assume)
+
+Environment:
+  CLOUD_TOOLBOX_HOME      install root (default: ~/.cloud-toolbox)
+  CLOUD_TOOLBOX_API_BASE  GitHub API base (default: https://api.github.com)
+  CLOUD_TOOLBOX_PYPI_BASE PyPI JSON base (default: https://pypi.org)
+  CLOUD_TOOLBOX_CURL      curl command override (used by tests)
+  GITHUB_TOKEN            optional GitHub token to avoid API rate limits (never printed)
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# install
+# ---------------------------------------------------------------------------
+
+cmd_install() {
+    local clis=()
+    if [ $# -eq 0 ]; then
+        clis=("${STANDARD_SET[@]}")
+    else
+        clis=("$@")
+    fi
+
+    # Validate: unknown names are an error before anything runs.
+    local name
+    for name in "${clis[@]}"; do
+        if ! is_known_cli "$name"; then
+            log_error "unknown CLI: $name"
+            log_error "supported: ${SUPPORTED_CLIS[*]}"
+            log_error "recognized but unsupported: ${UNSUPPORTED_CLIS[*]}"
+            return 2
+        fi
+    done
+
+    require_cmd curl
+
+    local installed=0 updated=0 unchanged=0 failed=0
+    local -a failed_names=()
+    local state detail reason
+    for name in "${clis[@]}"; do
+        if ! is_supported "$name"; then
+            reason=$(unsupported_reason "$name")
+            printf '%-10s %-11s %s\n' "$name" "unsupported" "$reason"
+            failed=$((failed + 1))
+            failed_names+=("$name")
+            continue
+        fi
+        # Called directly (not via $(...)) so make_tempdir's cleanup registry
+        # lives in this process and the EXIT trap removes temp dirs.
+        run_installer "$name"
+        state="${TB_STATE:-error}"
+        detail="${TB_DETAIL:-}"
+        printf '%-10s %-10s %s\n' "$name" "$state" "$detail"
+        case "$state" in
+            installed) installed=$((installed + 1)) ;;
+            updated) updated=$((updated + 1)) ;;
+            unchanged) unchanged=$((unchanged + 1)) ;;
+            *)
+                failed=$((failed + 1))
+                failed_names+=("$name")
+                ;;
+        esac
+    done
+
+    printf '\nApply complete: %d installed, %d updated, %d unchanged, %d failed\n' \
+        "$installed" "$updated" "$unchanged" "$failed"
+    if [ "$failed" -gt 0 ]; then
+        local joined="" n
+        for n in "${failed_names[@]}"; do
+            if [ -n "$joined" ]; then
+                joined="${joined}, ${n}"
+            else
+                joined="$n"
+            fi
+        done
+        printf 'Failed: %s\n' "$joined"
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+doctor_config() {
+    local name="$1" found="no" what=""
+    case "$name" in
+        gh)
+            if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ] || [ -f "$HOME/.config/gh/hosts.yml" ]; then
+                found=yes
+                what="GH_TOKEN/GITHUB_TOKEN/gh hosts.yml"
+            fi
+            ;;
+        aws)
+            if [ -n "${AWS_PROFILE:-}" ] || [ -d "$HOME/.aws" ]; then
+                found=yes
+                what="AWS_PROFILE/~/.aws"
+            fi
+            ;;
+        gcloud)
+            if [ -n "${CLOUDSDK_CONFIG:-}" ] || [ -d "$HOME/.config/gcloud" ]; then
+                found=yes
+                what="CLOUDSDK_CONFIG/~/.config/gcloud"
+            fi
+            ;;
+        tccli)
+            if [ -d "$HOME/.tccli" ] || env | grep -q '^TENCENTCLOUD_'; then
+                found=yes
+                what='$HOME/.tccli or TENCENTCLOUD_* env'
+            fi
+            ;;
+        *)
+            printf 'OK   %-10s config: n/a\n' "$name"
+            return 0
+            ;;
+    esac
+    if [ "$found" = "yes" ]; then
+        printf 'OK   %-10s config present (%s)\n' "$name" "$what"
+    else
+        printf 'WARN %-10s no config/env found (%s)\n' "$name" "$what"
+    fi
+}
+
+# doctor_one <cli>: prints OK/WARN/ERROR lines; returns 1 only on ERROR.
+doctor_one() {
+    local name="$1" r=0
+    local resolved="" exe="no" ver="" managed="no"
+    if [ -e "$CLOUD_TOOLBOX_HOME/bin/$name" ] || [ -L "$CLOUD_TOOLBOX_HOME/bin/$name" ]; then
+        managed="yes"
+    fi
+    resolved=$(resolve_path "$name") || resolved=""
+    if [ -z "$resolved" ]; then
+        printf 'ERROR %-10s not found on PATH — install with: cli-toolbox install %s\n' "$name" "$name"
+        return 1
+    fi
+    [ -x "$resolved" ] && exe="yes"
+    ver=$(_parse_version "$name" "$resolved")
+    printf 'OK   %-10s path=%s managed=%s executable=%s version=%s\n' \
+        "$name" "$resolved" "$managed" "$exe" "${ver:-?}"
+    if [ "$exe" = "no" ]; then
+        printf 'ERROR %-10s not executable\n' "$name"
+        r=1
+    fi
+    if [ -z "$ver" ]; then
+        printf 'WARN %-10s version could not be determined\n' "$name"
+    fi
+    if [ "$managed" = "yes" ] && ! is_managed "$resolved"; then
+        printf 'WARN %-10s another same-name CLI earlier in PATH shadows the managed binary\n' "$name"
+    fi
+    case "$name" in
+        tccli | pipx)
+            if cmd_exists python3; then
+                printf 'OK   %-10s runtime python3 present\n' "$name"
+            else
+                printf 'ERROR %-10s runtime python3 missing\n' "$name"
+                r=1
+            fi
+            ;;
+    esac
+    doctor_config "$name"
+    return "$r"
+}
+
+cmd_doctor() {
+    local rc=0 warns=0 errs=0
+    if detect_platform; then
+        printf 'OK   os/arch: %s/%s\n' "$TB_OS" "$TB_ARCH"
+    else
+        rc=1
+        errs=$((errs + 1))
+        printf 'ERROR os/arch: unsupported (%s/%s)\n' "${TB_OS:-?}" "${TB_ARCH:-?}"
+    fi
+
+    if printf ':%s:' "$PATH" | grep -Fq ":$CLOUD_TOOLBOX_HOME/bin:"; then
+        printf 'OK   PATH: %s/bin is on PATH\n' "$CLOUD_TOOLBOX_HOME"
+    else
+        warns=$((warns + 1))
+        printf 'WARN PATH: %s/bin is not on PATH\n' "$CLOUD_TOOLBOX_HOME"
+        printf '     add: export PATH="%s/bin:$PATH"\n' "$CLOUD_TOOLBOX_HOME"
+    fi
+
+    local broken
+    broken=$(detect_broken_symlinks)
+    if [ -n "$broken" ]; then
+        warns=$((warns + 1))
+        printf 'WARN broken symlinks in %s/bin:\n' "$CLOUD_TOOLBOX_HOME"
+        printf '%s\n' "$broken" | sed 's/^/     /'
+    else
+        printf 'OK   no broken symlinks in %s/bin\n' "$CLOUD_TOOLBOX_HOME"
+    fi
+
+    local name
+    for name in "${STANDARD_SET[@]}"; do
+        if ! doctor_one "$name"; then
+            rc=1
+            errs=$((errs + 1))
+        fi
+    done
+
+    printf '\nDoctor summary: %d errors, %d warnings\n' "$errs" "$warns"
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# list
+# ---------------------------------------------------------------------------
+
+# list_latest <cli>: latest stable version or "?" when the network fails.
+list_latest() {
+    local name="$1" body ver=""
+    case "$name" in
+        gh | glow | coscli | uv)
+            body=$(github_release_json "$(list_repo "$name")" 2>/dev/null) || body=""
+            if [ -n "$body" ]; then
+                ver=$(github_version_from_json "$body" 2>/dev/null)
+            fi
+            ;;
+        tccli | pipx)
+            ver=$(get_latest_version_pypi "$name" 2>/dev/null)
+            ;;
+        aws)
+            ver=$(http_get "https://awscli.amazonaws.com/v2/version.txt" 2>/dev/null | tr -d '[:space:]')
+            ;;
+        gcloud)
+            body=$(http_get "https://dl.google.com/dl/cloudsdk/channels/rapid/components-2.json" 2>/dev/null)
+            ver=$(printf '%s\n' "$body" \
+                | grep -o '"version"[[:space:]]*:[[:space:]]*"[0-9][^"]*"' \
+                | head -1 \
+                | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][^"]*\)".*/\1/')
+            ;;
+    esac
+    if [ -z "$ver" ]; then
+        log_warn "list: could not fetch latest version for ${name} (network issue); showing '?'"
+        printf '?\n'
+        return 0
+    fi
+    printf '%s\n' "$ver"
+    return 0
+}
+
+list_repo() {
+    case "$1" in
+        gh) printf '%s' "cli/cli" ;;
+        glow) printf '%s' "charmbracelet/glow" ;;
+        coscli) printf '%s' "tencentyun/coscli" ;;
+        uv) printf '%s' "astral-sh/uv" ;;
+    esac
+}
+
+list_one() {
+    local name="$1"
+    local current="" latest="" path="" managed="no" state="" status="missing"
+    if is_supported "$name"; then
+        latest=$(list_latest "$name")
+        if [ -e "$CLOUD_TOOLBOX_HOME/bin/$name" ] || [ -L "$CLOUD_TOOLBOX_HOME/bin/$name" ]; then
+            managed="yes"
+            status="managed"
+            path="$CLOUD_TOOLBOX_HOME/bin/$name"
+            current=$(get_installed_version "$name")
+        else
+            path=$(resolve_path "$name") || path=""
+            if [ -n "$path" ]; then
+                status="system"
+                current=$(_parse_version "$name" "$path")
+            fi
+        fi
+        if [ "$latest" = "?" ]; then
+            state="unknown"
+        elif [ -z "$current" ]; then
+            state="not-installed"
+        elif [ "$current" = "$latest" ]; then
+            state="unchanged"
+        elif version_gt "$latest" "$current"; then
+            state="update-available"
+        else
+            state="unknown"
+        fi
+        printf '%-10s %-12s %-14s %-14s %-30s %-8s %s\n' \
+            "$name" "$status" "${current:--}" "${latest:--}" "${path:--}" "$managed" "$state"
+    else
+        printf '%-10s %-12s %-14s %-14s %-30s %-8s %s (%s)\n' \
+            "$name" "unsupported" "-" "-" "-" "-" "unsupported" "$(unsupported_reason "$name")"
+    fi
+}
+
+cmd_list() {
+    local clis=()
+    if [ $# -eq 0 ]; then
+        clis=("${SUPPORTED_CLIS[@]}" "${UNSUPPORTED_CLIS[@]}")
+    else
+        clis=("$@")
+        local name
+        for name in "${clis[@]}"; do
+            if ! is_known_cli "$name"; then
+                log_error "unknown CLI: $name (supported: ${SUPPORTED_CLIS[*]})"
+                return 2
+            fi
+        done
+    fi
+    printf '%-10s %-12s %-14s %-14s %-30s %-8s %s\n' \
+        "CLI" "STATUS" "CURRENT" "LATEST" "PATH" "MANAGED" "STATE"
+    local name
+    for name in "${clis[@]}"; do
+        list_one "$name"
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+main() {
+    local cmd="${1:-help}"
+    case "$cmd" in
+        install)
+            shift
+            cmd_install "$@"
+            ;;
+        doctor)
+            cmd_doctor
+            ;;
+        list)
+            shift
+            cmd_list "$@"
+            ;;
+        help | -h | --help)
+            usage
+            ;;
+        "")
+            usage
+            ;;
+        *)
+            log_error "unknown command: $cmd"
+            usage
+            exit 2
+            ;;
+    esac
+}
+
+main "$@"
