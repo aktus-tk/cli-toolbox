@@ -1,7 +1,6 @@
 # shellcheck shell=bash
 # lib/installers.sh — per-CLI installers for cli-toolbox
-
-# Requires lib/common.sh and lib/providers.sh to be sourced first.
+# Requires lib/common.sh, lib/packages.sh, and lib/providers.sh.
 
 # ---------------------------------------------------------------------------
 # shared scaffolding
@@ -10,21 +9,17 @@
 _installer_start() {
     TB_STATE=error
     TB_DETAIL=""
-    if ! detect_platform; then
+    detect_platform || {
         TB_DETAIL="unsupported platform (${TB_OS:-?}/${TB_ARCH:-?})"
         return 1
-    fi
-    if [ "$TB_OS" != "linux" ]; then
-        TB_DETAIL="macOS is not yet supported (Linux amd64/arm64 is the primary target)"
-        return 1
-    fi
+    }
     return 0
 }
 
 _find_in_archive() {
     local root="$1" name="$2"
     shift 2
-    local cand p
+    local cand
     if [ -f "$root/$name" ]; then
         printf '%s\n' "$root/$name"
         return 0
@@ -35,14 +30,7 @@ _find_in_archive() {
             return 0
         fi
     done
-    while IFS= read -r p; do
-        [ -n "$p" ] || continue
-        if [ -f "$p" ]; then
-            printf '%s\n' "$p"
-            return 0
-        fi
-    done <<< "$(find "$root" -maxdepth 3 -type f -name "$name" 2>/dev/null)"
-    return 1
+    find_file_limited "$root" 3 "$name"
 }
 
 _finish_install() {
@@ -53,8 +41,13 @@ _finish_install() {
         return 1
     fi
     if [ -n "$before" ]; then
-        TB_STATE=updated
-        TB_DETAIL="${before} -> ${ver}"
+        if [ "$before" = "$ver" ]; then
+            TB_STATE=unchanged
+            TB_DETAIL="$ver"
+        else
+            TB_STATE=updated
+            TB_DETAIL="${before} -> ${ver}"
+        fi
     else
         TB_STATE=installed
         TB_DETAIL="${ver}"
@@ -70,8 +63,24 @@ _ensure_path_prefix() {
     export PATH="$dir:$PATH"
 }
 
+_release_os_label() {
+    case "$TB_OS" in
+        linux) printf '%s' "Linux" ;;
+        darwin) printf '%s' "Darwin" ;;
+        *) return 1 ;;
+    esac
+}
+
+_release_arch_label() {
+    case "$TB_ARCH" in
+        amd64) printf '%s' "x86_64" ;;
+        arm64) printf '%s' "arm64" ;;
+        *) return 1 ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
-# uv — official standalone installer (download script, run separately)
+# uv — official standalone installer
 # ---------------------------------------------------------------------------
 
 install_uv() {
@@ -92,50 +101,72 @@ install_uv() {
         return 1
     fi
     tmp="$TB_TMPDIR"
-    url="${CLOUD_TOOLBOX_UV_INSTALL_URL:-https://astral.sh/uv/install.sh}"
+    url="${CLI_TOOLBOX_UV_INSTALL_URL:-https://astral.sh/uv/install.sh}"
     log_info "uv: downloading installer ${url}"
     if ! download_file "$url" "$tmp/install.sh"; then
         TB_DETAIL="download failed (uv installer)"
         return 1
     fi
     chmod +x "$tmp/install.sh"
-    mkdir -p "$CLOUD_TOOLBOX_HOME/bin" || { TB_DETAIL="cannot create bin directory"; return 1; }
-    log_info "uv: running official standalone installer (UV_INSTALL_DIR=${CLOUD_TOOLBOX_HOME}/bin)"
-    if ! UV_INSTALL_DIR="$CLOUD_TOOLBOX_HOME/bin" UV_NO_MODIFY_PATH=1 UV_UNMANAGED_INSTALL=1 \
+    mkdir -p "$CLI_TOOLBOX_HOME/bin" || { TB_DETAIL="cannot create bin directory"; return 1; }
+    log_info "uv: running official standalone installer (UV_INSTALL_DIR=${CLI_TOOLBOX_HOME}/bin)"
+    if ! UV_INSTALL_DIR="$CLI_TOOLBOX_HOME/bin" UV_NO_MODIFY_PATH=1 UV_UNMANAGED_INSTALL=1 \
         sh "$tmp/install.sh" >/dev/null 2>&1; then
         TB_DETAIL="uv installer failed"
         return 1
     fi
     ver=$(get_installed_version uv)
-    manifest_record uv official-installer "$ver" "$CLOUD_TOOLBOX_HOME/bin/uv"
+    manifest_record uv official-installer "$ver" "$CLI_TOOLBOX_HOME/bin/uv"
     _finish_install uv "$installed" "$ver"
 }
 
 # ---------------------------------------------------------------------------
-# tccli — uv tool (isolated; never pip/venv directly)
+# tccli — uv tool
 # ---------------------------------------------------------------------------
 
 _ensure_uv_on_path() {
-    _ensure_path_prefix "$CLOUD_TOOLBOX_HOME/bin"
+    _ensure_path_prefix "$CLI_TOOLBOX_HOME/bin"
     if ! cmd_exists uv; then
         log_info "tccli: uv not found; installing uv first"
         install_uv || return 1
-        _ensure_path_prefix "$CLOUD_TOOLBOX_HOME/bin"
+        _ensure_path_prefix "$CLI_TOOLBOX_HOME/bin"
     fi
     cmd_exists uv
 }
 
 _warn_tccli_path_collision() {
-    local uv_path="" other="" uv_bin_dir=""
+    local uv_path="" other="" uv_real="" other_real="" uv_bin_dir=""
     uv_path=$(uv_tool_executable_path tccli) || uv_path=""
     other=$(command -v tccli 2>/dev/null) || other=""
+    if [ -z "$other" ] || [ -z "$uv_path" ]; then
+        return 0
+    fi
+    uv_real=$(resolve_real_path "$uv_path") || uv_real="$uv_path"
+    other_real=$(resolve_real_path "$other") || other_real="$other"
+    if [ "$uv_real" = "$other_real" ]; then
+        return 0
+    fi
     uv_bin_dir=$(uv_tool_bin_dir)
-    if [ -n "$other" ] && [ "$other" != "$uv_path" ]; then
-        log_warn "tccli: another tccli exists at ${other}; ensure ${uv_bin_dir} is before it on PATH"
-        case ":$PATH:" in
-            *":${uv_bin_dir}:"*) ;;
-            *) log_warn "tccli: add export PATH=\"${uv_bin_dir}:\$PATH\" so uv-managed tccli is preferred" ;;
-        esac
+    log_warn "tccli: another tccli exists at ${other}; ensure ${uv_bin_dir} is before it on PATH"
+    case ":$PATH:" in
+        *":${uv_bin_dir}:"*) ;;
+        *) log_warn "tccli: add export PATH=\"${uv_bin_dir}:\$PATH\" so uv-managed tccli is preferred" ;;
+    esac
+}
+
+_prepare_tccli_tool_bin() {
+    local tool_bin="$1" candidate="" real=""
+    candidate="$tool_bin/tccli"
+    [ -e "$candidate" ] || [ -L "$candidate" ] || return 0
+    real=$(resolve_real_path "$candidate") || real="$candidate"
+    if path_is_pipx "$real"; then
+        log_warn "tccli: replacing pipx-managed ${candidate} with uv tool install"
+        rm -f "$candidate"
+        return 0
+    fi
+    if ! uv_tool_has tccli; then
+        log_warn "tccli: removing existing ${candidate} before uv tool install"
+        rm -f "$candidate"
     fi
 }
 
@@ -147,9 +178,13 @@ install_tccli() {
         TB_DETAIL="uv is required for tccli (install uv first)"
         return 1
     fi
-    local latest installed ver uv="" tool_bin=""
+    local latest installed ver uv="" tool_bin="" uv_path=""
     latest=$(get_latest_version_pypi tccli 2>/dev/null) || latest=""
-    installed=$(get_installed_version tccli)
+    installed=""
+    uv_path=$(uv_tool_executable_path tccli 2>/dev/null) || uv_path=""
+    if [ -n "$uv_path" ]; then
+        installed=$(_parse_version tccli "$uv_path")
+    fi
     if [ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" = "$latest" ]; then
         TB_STATE=unchanged
         TB_DETAIL="$installed"
@@ -160,129 +195,240 @@ install_tccli() {
     tool_bin=$(uv_tool_bin_dir)
     mkdir -p "$tool_bin"
     _ensure_path_prefix "$tool_bin"
+    if uv_tool_has tccli; then
+        UV_TOOL_BIN_DIR="$tool_bin" "$uv" tool uninstall tccli >/dev/null 2>&1 || true
+    fi
+    _prepare_tccli_tool_bin "$tool_bin"
     log_info "tccli: uv tool install --upgrade tccli (bin dir: ${tool_bin})"
-    UV_TOOL_BIN_DIR="$tool_bin" "$uv" tool install --upgrade tccli >/dev/null 2>&1 || true
+    if ! UV_TOOL_BIN_DIR="$tool_bin" "$uv" tool install --upgrade --force tccli >/dev/null 2>&1; then
+        TB_DETAIL="uv tool install failed for tccli"
+        return 1
+    fi
     if ! uv_tool_has tccli; then
         TB_DETAIL="uv tool install failed for tccli"
         return 1
     fi
-    ver=$(get_installed_version tccli)
-    manifest_record tccli uv-tool "$ver" "$(uv_tool_executable_path tccli 2>/dev/null || printf '%s' "$tool_bin/tccli")"
+    ver=""
+    uv_path=$(uv_tool_executable_path tccli 2>/dev/null) || uv_path=""
+    if [ -n "$uv_path" ]; then
+        ver=$(_parse_version tccli "$uv_path")
+    fi
+    if [ -z "$ver" ]; then
+        TB_DETAIL="installed but version check failed"
+        return 1
+    fi
+    if [ -n "$latest" ] && [ "$ver" != "$latest" ] && version_gt "$latest" "$ver"; then
+        TB_DETAIL="still ${ver} after install (latest ${latest})"
+        return 1
+    fi
+    manifest_record tccli uv-tool "$ver" "${uv_path:-$tool_bin/tccli}"
     _warn_tccli_path_collision
     _finish_install tccli "$installed" "$ver"
 }
 
 # ---------------------------------------------------------------------------
-# APT packages — gh, gcloud, az (overridable for tests)
+# apt / brew package CLIs
 # ---------------------------------------------------------------------------
 
-apt_run() {
-    if [ "$(id -u)" -eq 0 ]; then
-        "$@"
-    else
-        sudo "$@"
-    fi
-}
-
-apt_require_sudo() {
-    if can_sudo; then
-        return 0
-    fi
-    TB_DETAIL="requires root (sudo apt install $(cli_apt_package "$1"))"
-    return 1
-}
-
-apt_setup_repo_gh() {
-    apt_run mkdir -p -m 755 /etc/apt/keyrings
-    download_file "https://cli.github.com/packages/githubcli-archive-keyring.gpg" \
-        "/tmp/githubcli-archive-keyring.gpg"
-    apt_run cp /tmp/githubcli-archive-keyring.gpg /etc/apt/keyrings/githubcli-archive-keyring.gpg
-    apt_run chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-    printf '%s\n' \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-        | apt_run tee /etc/apt/sources.list.d/github-cli.list >/dev/null
-}
-
-apt_setup_repo_gcloud() {
-    apt_run mkdir -p -m 755 /etc/apt/keyrings
-    download_file "https://packages.cloud.google.com/apt/doc/apt-key.gpg" "/tmp/cloud-google.gpg"
-    apt_run cp /tmp/cloud-google.gpg /etc/apt/keyrings/cloud.google.gpg
-    apt_run chmod go+r /etc/apt/keyrings/cloud.google.gpg
-    printf '%s\n' \
-        "deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
-        | apt_run tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
-}
-
-apt_setup_repo_az() {
-    apt_run mkdir -p -m 755 /etc/apt/keyrings
-    download_file "https://packages.microsoft.com/keys/microsoft.asc" "/tmp/microsoft.asc"
-    gpg --dearmor < /tmp/microsoft.asc > /tmp/microsoft.gpg
-    apt_run cp /tmp/microsoft.gpg /etc/apt/keyrings/microsoft.gpg
-    apt_run chmod go+r /etc/apt/keyrings/microsoft.gpg
-    printf '%s\n' \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
-        | apt_run tee /etc/apt/sources.list.d/azure-cli.list >/dev/null
-}
-
-apt_ensure_repo() {
-    local cli="$1"
-    case "$cli" in
-        gh)
-            [ -f /etc/apt/sources.list.d/github-cli.list ] || apt_setup_repo_gh
-            ;;
-        gcloud)
-            [ -f /etc/apt/sources.list.d/google-cloud-sdk.list ] || apt_setup_repo_gcloud
-            ;;
-        az)
-            [ -f /etc/apt/sources.list.d/azure-cli.list ] || apt_setup_repo_az
-            ;;
-    esac
-}
-
-install_apt_cli() {
-    local cli="$1" pkg="" installed="" latest="" ver=""
+install_package_cli() {
+    local cli="$1" provider="$2" pkg="" installed="" latest="" ver="" path=""
     TB_STATE=error
     TB_DETAIL=""
     _installer_start || return 1
-    if ! has_apt; then
-        TB_DETAIL="apt is required for ${cli} on this platform"
+    if ! package_manager_available "$provider"; then
+        if [ "$provider" = "brew" ]; then
+            TB_DETAIL="Homebrew is required on macOS (install from https://brew.sh)"
+        else
+            TB_DETAIL="apt is required for ${cli} on this platform"
+        fi
         return 1
     fi
-    apt_require_sudo "$cli" || return 1
-    pkg=$(cli_apt_package "$cli")
-    installed=$(apt_installed_version "$pkg")
-    apt_ensure_repo "$cli"
-    apt_run apt-get update -qq
-    latest=$(apt_candidate_version "$pkg")
+    if [ "$provider" = "apt" ]; then
+        if ! can_sudo; then
+            pkg=$(cli_package_name "$cli" apt)
+            TB_DETAIL="requires root (sudo apt install ${pkg})"
+            return 1
+        fi
+        if ! apt_ensure_repo "$cli"; then
+            TB_DETAIL="failed to configure apt repository for ${cli}"
+            return 1
+        fi
+        apt_cleanup_conflicts "$cli"
+    fi
+    pkg=$(cli_package_name "$cli" "$provider")
+    installed=$(package_installed_version "$provider" "$pkg")
+    latest=$(package_latest_version "$provider" "$pkg")
     if [ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" = "$latest" ]; then
         TB_STATE=unchanged
         TB_DETAIL="$installed"
-        manifest_record "$cli" official-package "$installed" "$(command -v "$cli" 2>/dev/null || echo "/usr/bin/$cli")"
+        path=$(command -v "$cli" 2>/dev/null) || path=""
+        manifest_record "$cli" "$provider" "$installed" "${path:-unknown}"
         return 0
     fi
-    log_info "${cli}: apt-get install -y ${pkg}"
-    if ! apt_run env DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg" >/dev/null 2>&1; then
-        TB_DETAIL="apt install failed for ${pkg}"
+    if [ "$provider" = "apt" ]; then
+        apt_update_quiet "$cli"
+    fi
+    log_info "${cli}: ${provider} install/upgrade ${pkg}"
+    if ! package_install_or_upgrade "$provider" "$pkg"; then
+        TB_DETAIL="${provider} install failed for ${pkg}"
         return 1
     fi
-    ver=$(apt_installed_version "$pkg")
-    manifest_record "$cli" official-package "$ver" "$(command -v "$cli" 2>/dev/null || echo "/usr/bin/$cli")"
+    ver=$(package_installed_version "$provider" "$pkg")
+    path=$(command -v "$cli" 2>/dev/null) || path=""
+    manifest_record "$cli" "$provider" "$ver" "${path:-unknown}"
     _finish_install "$cli" "$installed" "$ver"
 }
 
-install_gh() { install_apt_cli gh; }
-install_gcloud() { install_apt_cli gcloud; }
-install_az() { install_apt_cli az; }
+install_gh() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider gh "$TB_OS")
+    install_package_cli gh "$provider"
+}
+
+install_az() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider az "$TB_OS")
+    install_package_cli az "$provider"
+}
+
+install_brew_cli() {
+    install_package_cli "$1" brew
+}
 
 # ---------------------------------------------------------------------------
-# glow / coscli — GitHub release binaries
+# gcloud — official archive (Linux + macOS)
 # ---------------------------------------------------------------------------
 
-install_glow() {
+_warn_gcloud_path_collision() {
+    local managed="" other="" managed_real="" other_real=""
+    managed=$(gcloud_managed_bin)
+    other=$(command -v gcloud 2>/dev/null) || other=""
+    if [ -z "$other" ] || [ ! -e "$managed" ]; then
+        return 0
+    fi
+    managed_real=$(resolve_real_path "$managed") || managed_real="$managed"
+    other_real=$(resolve_real_path "$other") || other_real="$other"
+    if [ "$managed_real" = "$other_real" ]; then
+        return 0
+    fi
+    log_warn "gcloud: another gcloud exists at ${other}; ensure ${CLI_TOOLBOX_HOME}/bin is before it on PATH"
+    case ":$PATH:" in
+        *":${CLI_TOOLBOX_HOME}/bin:"*) ;;
+        *) log_warn "gcloud: add export PATH=\"${CLI_TOOLBOX_HOME}/bin:\$PATH\" so managed gcloud is preferred" ;;
+    esac
+}
+
+_gcloud_prune_versions() {
+    local root versions_dir current_ver="" dir ver count=0
+    root=$(gcloud_sdk_root)
+    versions_dir="$root/versions"
+    [ -d "$versions_dir" ] || return 0
+    if [ -L "$root/current" ]; then
+        current_ver=$(basename "$(readlink "$root/current")")
+    fi
+    for dir in "$versions_dir"/*; do
+        [ -d "$dir" ] || continue
+        ver=$(basename "$dir")
+        [ "$ver" = "$current_ver" ] && continue
+        count=$((count + 1))
+        if [ "$count" -gt 1 ]; then
+            rm -rf "$dir"
+        fi
+    done
+}
+
+install_gcloud() {
     TB_STATE=error
     TB_DETAIL=""
     _installer_start || return 1
-    local body latest installed
+    local latest installed url tmp tarball sdk_root versions_dir ver_dir current_link ver
+    latest=$(gcloud_latest_version) || {
+        TB_DETAIL="cannot determine latest version"
+        return 1
+    }
+    installed=$(gcloud_managed_version 2>/dev/null) || installed=""
+    if [ -n "$installed" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        _warn_gcloud_path_collision
+        return 0
+    fi
+    url=$(gcloud_archive_url "$latest" "$TB_OS" "$TB_ARCH") || {
+        TB_DETAIL="unsupported platform for gcloud archive (${TB_OS}/${TB_ARCH})"
+        return 1
+    }
+    tarball=$(basename "$url")
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    log_info "gcloud: downloading ${url}"
+    if ! download_file "$url" "$tmp/$tarball"; then
+        TB_DETAIL="download failed"
+        return 1
+    fi
+    if ! extract_archive "$tmp/$tarball" "$tmp/x"; then
+        TB_DETAIL="extraction failed"
+        return 1
+    fi
+    if [ ! -d "$tmp/x/google-cloud-sdk" ]; then
+        TB_DETAIL="google-cloud-sdk directory not found in archive"
+        return 1
+    fi
+    sdk_root=$(gcloud_sdk_root)
+    versions_dir="$sdk_root/versions"
+    ver_dir="$versions_dir/$latest"
+    mkdir -p "$versions_dir" "$CLI_TOOLBOX_HOME/bin" || {
+        TB_DETAIL="cannot create gcloud directories"
+        return 1
+    }
+    if [ -d "$ver_dir" ]; then
+        rm -rf "$ver_dir"
+    fi
+    if ! mv "$tmp/x/google-cloud-sdk" "$ver_dir"; then
+        TB_DETAIL="cannot place SDK version directory"
+        return 1
+    fi
+    ver=$("$ver_dir/bin/gcloud" version 2>/dev/null | sed -n 's/.*Google Cloud SDK \([0-9][^ ]*\).*/\1/p' | head -1)
+    if [ -z "$ver" ]; then
+        rm -rf "$ver_dir"
+        TB_DETAIL="gcloud version check failed after extraction"
+        return 1
+    fi
+    current_link="$sdk_root/current"
+    if ! atomic_symlink "versions/$latest" "$current_link"; then
+        rm -rf "$ver_dir"
+        TB_DETAIL="failed to update current symlink"
+        return 1
+    fi
+    if ! atomic_symlink "../tools/google-cloud-sdk/current/bin/gcloud" "$CLI_TOOLBOX_HOME/bin/gcloud"; then
+        TB_DETAIL="failed to create gcloud symlink in bin"
+        return 1
+    fi
+    _gcloud_prune_versions
+    manifest_record gcloud official-archive "$ver" "$CLI_TOOLBOX_HOME/bin/gcloud"
+    _warn_gcloud_path_collision
+    _finish_install gcloud "$installed" "$ver"
+}
+
+# ---------------------------------------------------------------------------
+# glow / coscli — GitHub release binaries (or brew for glow on macOS)
+# ---------------------------------------------------------------------------
+
+install_glow() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider glow "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli glow brew
+        return $?
+    fi
+    TB_STATE=error
+    TB_DETAIL=""
+    local body latest installed os_label arch_label
     body=$(github_release_json charmbracelet/glow) || { TB_DETAIL="cannot determine latest version"; return 1; }
     latest=$(github_version_from_json "$body") || { TB_DETAIL="cannot determine latest version"; return 1; }
     installed=$(get_installed_version glow)
@@ -291,6 +437,8 @@ install_glow() {
         TB_DETAIL="$installed"
         return 0
     fi
+    os_label=$(_release_os_label) || { TB_DETAIL="unsupported OS"; return 1; }
+    arch_label=$(_release_arch_label) || { TB_DETAIL="unsupported arch"; return 1; }
     local arch asset tmp tag asset_url checksum_url cktext expected src ver
     case "$TB_ARCH" in
         amd64) arch=x86_64 ;;
@@ -301,7 +449,7 @@ install_glow() {
         return 1
     fi
     tmp="$TB_TMPDIR"
-    asset="glow_${latest}_Linux_${arch}.tar.gz"
+    asset="glow_${latest}_${os_label}_${arch_label}.tar.gz"
     tag="v${latest}"
     asset_url=$(github_asset_url charmbracelet/glow "$tag" "$asset" "$body")
     checksum_url=$(github_asset_url charmbracelet/glow "$tag" "checksums.txt" "$body")
@@ -324,14 +472,14 @@ install_glow() {
         TB_DETAIL="extraction failed"
         return 1
     fi
-    src=$(_find_in_archive "$tmp/x" glow "glow_${latest}_Linux_${arch}")
+    src=$(_find_in_archive "$tmp/x" glow "glow_${latest}_${os_label}_${arch_label}")
     [ -n "$src" ] || { TB_DETAIL="binary not found in archive"; return 1; }
-    if ! atomic_install "$src" "$CLOUD_TOOLBOX_HOME/bin/glow"; then
+    if ! atomic_install "$src" "$CLI_TOOLBOX_HOME/bin/glow"; then
         TB_DETAIL="failed to place binary"
         return 1
     fi
     ver=$(get_installed_version glow)
-    manifest_record glow release-binary "$ver" "$CLOUD_TOOLBOX_HOME/bin/glow"
+    manifest_record glow release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/glow"
     _finish_install glow "$installed" "$ver"
 }
 
@@ -339,7 +487,7 @@ install_coscli() {
     TB_STATE=error
     TB_DETAIL=""
     _installer_start || return 1
-    local body latest installed
+    local body latest installed os_name
     body=$(github_release_json tencentyun/coscli) || { TB_DETAIL="cannot determine latest version"; return 1; }
     latest=$(github_version_from_json "$body") || { TB_DETAIL="cannot determine latest version"; return 1; }
     installed=$(get_installed_version coscli)
@@ -348,13 +496,18 @@ install_coscli() {
         TB_DETAIL="$installed"
         return 0
     fi
+    case "$TB_OS" in
+        linux) os_name=linux ;;
+        darwin) os_name=darwin ;;
+        *) TB_DETAIL="unsupported OS"; return 1 ;;
+    esac
     local tmp asset tag asset_url checksum_url cktext expected ver
     if ! make_tempdir; then
         TB_DETAIL="cannot create temp directory"
         return 1
     fi
     tmp="$TB_TMPDIR"
-    asset="coscli-v${latest}-linux-${TB_ARCH}"
+    asset="coscli-v${latest}-${os_name}-${TB_ARCH}"
     tag="v${latest}"
     asset_url=$(github_asset_url tencentyun/coscli "$tag" "$asset" "$body")
     checksum_url=$(github_asset_url tencentyun/coscli "$tag" "sha256sum.log" "$body")
@@ -373,23 +526,29 @@ install_coscli() {
         TB_DETAIL="checksum mismatch"
         return 1
     fi
-    if ! atomic_install "$tmp/$asset" "$CLOUD_TOOLBOX_HOME/bin/coscli"; then
+    if ! atomic_install "$tmp/$asset" "$CLI_TOOLBOX_HOME/bin/coscli"; then
         TB_DETAIL="failed to place binary"
         return 1
     fi
     ver=$(get_installed_version coscli)
-    manifest_record coscli release-binary "$ver" "$CLOUD_TOOLBOX_HOME/bin/coscli"
+    manifest_record coscli release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/coscli"
     _finish_install coscli "$installed" "$ver"
 }
 
 # ---------------------------------------------------------------------------
-# aws — AWS CLI v2 official installer (never uv tool / awscli v1)
+# aws — official installer (Linux) or brew (macOS)
 # ---------------------------------------------------------------------------
 
 install_aws() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider aws "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli aws brew
+        return $?
+    fi
     TB_STATE=error
     TB_DETAIL=""
-    _installer_start || return 1
     local latest
     latest=$(http_get "https://awscli.amazonaws.com/v2/version.txt" | tr -d '[:space:]')
     if [ -z "$latest" ]; then
@@ -428,21 +587,21 @@ install_aws() {
         TB_DETAIL="aws installer not found in archive"
         return 1
     fi
-    log_info "aws: running official installer (--install-dir ${CLOUD_TOOLBOX_HOME}/tools/aws-cli --bin-dir ${CLOUD_TOOLBOX_HOME}/bin --update)"
+    log_info "aws: running official installer (--install-dir ${CLI_TOOLBOX_HOME}/tools/aws-cli --bin-dir ${CLI_TOOLBOX_HOME}/bin --update)"
     if ! "$tmp/x/aws/install" \
-        --install-dir "$CLOUD_TOOLBOX_HOME/tools/aws-cli" \
-        --bin-dir "$CLOUD_TOOLBOX_HOME/bin" \
+        --install-dir "$CLI_TOOLBOX_HOME/tools/aws-cli" \
+        --bin-dir "$CLI_TOOLBOX_HOME/bin" \
         --update >/dev/null 2>&1; then
         TB_DETAIL="aws installer failed"
         return 1
     fi
     ver=$(get_installed_version aws)
-    manifest_record aws official-installer "$ver" "$CLOUD_TOOLBOX_HOME/bin/aws"
+    manifest_record aws official-installer "$ver" "$CLI_TOOLBOX_HOME/bin/aws"
     _finish_install aws "$installed" "$ver"
 }
 
 # ---------------------------------------------------------------------------
-# local wrappers — cloud-cli repo (symlink; never delete existing CLIs)
+# local wrappers
 # ---------------------------------------------------------------------------
 
 install_wrapper() {
@@ -462,20 +621,20 @@ install_wrapper() {
         return 1
     fi
     local current=""
-    if [ -L "$CLOUD_TOOLBOX_HOME/bin/$name" ]; then
-        current=$(readlink "$CLOUD_TOOLBOX_HOME/bin/$name" 2>/dev/null)
+    if [ -L "$CLI_TOOLBOX_HOME/bin/$name" ]; then
+        current=$(readlink "$CLI_TOOLBOX_HOME/bin/$name" 2>/dev/null)
         if [ "$current" = "$src" ]; then
             TB_STATE=unchanged
             TB_DETAIL="wrapper"
-            manifest_record "$name" local-wrapper "wrapper" "$CLOUD_TOOLBOX_HOME/bin/$name"
+            manifest_record "$name" local-wrapper "wrapper" "$CLI_TOOLBOX_HOME/bin/$name"
             return 0
         fi
     fi
-    if ! atomic_symlink "$src" "$CLOUD_TOOLBOX_HOME/bin/$name"; then
+    if ! atomic_symlink "$src" "$CLI_TOOLBOX_HOME/bin/$name"; then
         TB_DETAIL="failed to place wrapper symlink"
         return 1
     fi
-    manifest_record "$name" local-wrapper "wrapper" "$CLOUD_TOOLBOX_HOME/bin/$name"
+    manifest_record "$name" local-wrapper "wrapper" "$CLI_TOOLBOX_HOME/bin/$name"
     TB_STATE=installed
     TB_DETAIL="wrapper -> ${src}"
     return 0
@@ -484,6 +643,184 @@ install_wrapper() {
 install_awst() { install_wrapper awst; }
 install_gcloudt() { install_wrapper gcloudt; }
 install_tcclit() { install_wrapper tcclit; }
+
+# ---------------------------------------------------------------------------
+# delete — remove cli-toolbox managed artifacts only (never system apt/brew)
+# ---------------------------------------------------------------------------
+
+_remove_bin_link() {
+    local name="$1"
+    local path="$CLI_TOOLBOX_HOME/bin/$name"
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    rm -f "$path"
+}
+
+_delete_uv() {
+    TB_STATE=error
+    TB_DETAIL=""
+    if ! cli_is_toolbox_managed uv; then
+        TB_STATE=skipped-not-managed
+        TB_DETAIL="not managed by cli-toolbox"
+        return 0
+    fi
+    _remove_bin_link uv
+    _remove_bin_link uvx
+    manifest_remove uv
+    TB_STATE=deleted
+    TB_DETAIL="removed from ${CLI_TOOLBOX_HOME}/bin"
+    return 0
+}
+
+_delete_tccli() {
+    local uv="" tool_bin="" exe=""
+    TB_STATE=error
+    TB_DETAIL=""
+    if ! cli_is_toolbox_managed tccli; then
+        TB_STATE=skipped-not-managed
+        TB_DETAIL="not managed by cli-toolbox"
+        return 0
+    fi
+    tool_bin=$(uv_tool_bin_dir)
+    if uv=$(uv_bin); then
+        UV_TOOL_BIN_DIR="$tool_bin" "$uv" tool uninstall tccli >/dev/null 2>&1 || true
+    fi
+    exe="$tool_bin/tccli"
+    if [ -e "$exe" ] || [ -L "$exe" ]; then
+        rm -f "$exe"
+    fi
+    manifest_remove tccli
+    TB_STATE=deleted
+    TB_DETAIL="removed uv-tool install"
+    return 0
+}
+
+_delete_gcloud() {
+    TB_STATE=error
+    TB_DETAIL=""
+    if ! cli_is_toolbox_managed gcloud; then
+        TB_STATE=skipped-not-managed
+        TB_DETAIL="not managed by cli-toolbox"
+        return 0
+    fi
+    _remove_bin_link gcloud
+    rm -rf "$(gcloud_sdk_root)"
+    manifest_remove gcloud
+    TB_STATE=deleted
+    TB_DETAIL="removed archive install"
+    return 0
+}
+
+_delete_aws() {
+    TB_STATE=error
+    TB_DETAIL=""
+    if ! cli_is_toolbox_managed aws; then
+        TB_STATE=skipped-not-managed
+        TB_DETAIL="not managed by cli-toolbox"
+        return 0
+    fi
+    _remove_bin_link aws
+    rm -rf "$CLI_TOOLBOX_HOME/tools/aws-cli"
+    manifest_remove aws
+    TB_STATE=deleted
+    TB_DETAIL="removed official installer tree"
+    return 0
+}
+
+_delete_release_binary() {
+    local cli="$1"
+    TB_STATE=error
+    TB_DETAIL=""
+    if ! cli_is_toolbox_managed "$cli"; then
+        TB_STATE=skipped-not-managed
+        TB_DETAIL="not managed by cli-toolbox"
+        return 0
+    fi
+    _remove_bin_link "$cli"
+    manifest_remove "$cli"
+    TB_STATE=deleted
+    TB_DETAIL="removed from ${CLI_TOOLBOX_HOME}/bin"
+    return 0
+}
+
+_delete_package_cli() {
+    local cli="$1" provider="" pkg=""
+    TB_STATE=error
+    TB_DETAIL=""
+    detect_platform 2>/dev/null || true
+    provider=$(resolve_provider "$cli" "${TB_OS:-linux}")
+    if ! manifest_lookup "$cli" >/dev/null 2>&1; then
+        TB_STATE=skipped-not-managed
+        TB_DETAIL="not managed by cli-toolbox"
+        return 0
+    fi
+    pkg=$(cli_package_name "$cli" "$provider")
+    manifest_remove "$cli"
+    case "$provider" in
+        apt)
+            TB_STATE=skipped-system
+            TB_DETAIL="manifest cleared; remove system package with: sudo apt remove ${pkg}"
+            ;;
+        brew)
+            TB_STATE=skipped-system
+            TB_DETAIL="manifest cleared; remove with: brew uninstall ${pkg}"
+            ;;
+        *)
+            TB_STATE=deleted
+            TB_DETAIL="manifest cleared"
+            ;;
+    esac
+    return 0
+}
+
+_delete_wrapper() {
+    local name="$1"
+    TB_STATE=error
+    TB_DETAIL=""
+    if ! cli_is_toolbox_managed "$name"; then
+        TB_STATE=skipped-not-managed
+        TB_DETAIL="not managed by cli-toolbox"
+        return 0
+    fi
+    _remove_bin_link "$name"
+    manifest_remove "$name"
+    TB_STATE=deleted
+    TB_DETAIL="removed wrapper symlink"
+    return 0
+}
+
+run_uninstaller() {
+    local name="$1" provider=""
+    detect_platform 2>/dev/null || true
+    case "$name" in
+        uv) _delete_uv ;;
+        tccli) _delete_tccli ;;
+        gh | az) _delete_package_cli "$name" ;;
+        gcloud) _delete_gcloud ;;
+        glow)
+            provider=$(resolve_provider glow "${TB_OS:-linux}")
+            if [ "$provider" = "brew" ]; then
+                _delete_package_cli glow
+            else
+                _delete_release_binary glow
+            fi
+            ;;
+        coscli) _delete_release_binary coscli ;;
+        aws)
+            provider=$(resolve_provider aws "${TB_OS:-linux}")
+            if [ "$provider" = "brew" ]; then
+                _delete_package_cli aws
+            else
+                _delete_aws
+            fi
+            ;;
+        awst | gcloudt | tcclit) _delete_wrapper "$name" ;;
+        *) TB_STATE=error; TB_DETAIL="no uninstaller for ${name}"; return 1 ;;
+    esac
+    case "${TB_STATE:-error}" in
+        error) return 1 ;;
+    esac
+    return 0
+}
 
 # ---------------------------------------------------------------------------
 # dispatch

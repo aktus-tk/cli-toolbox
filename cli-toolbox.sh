@@ -8,6 +8,8 @@ set -u
 TB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 . "$TB_ROOT/lib/common.sh"
+# shellcheck source=lib/packages.sh
+. "$TB_ROOT/lib/packages.sh"
 # shellcheck source=lib/providers.sh
 . "$TB_ROOT/lib/providers.sh"
 # shellcheck source=lib/installers.sh
@@ -19,6 +21,7 @@ cli-toolbox.sh — idempotent installer for cloud/ops CLIs
 
 Usage:
   cli-toolbox.sh install [CLI...]   converge CLIs to official stable-latest (install or update)
+  cli-toolbox.sh delete [CLI...]    remove cli-toolbox managed installs (system apt/brew untouched)
   cli-toolbox.sh doctor             check environment and installed CLIs
   cli-toolbox.sh list [CLI...]      show status table (CLI, status, current, latest, path, provider, state)
   cli-toolbox.sh help               show this help
@@ -30,11 +33,11 @@ Optional wrappers (from cloud-cli repo):
   awst gcloudt tcclit
 
 Environment:
-  CLOUD_TOOLBOX_HOME        install root (default: ~/.cloud-toolbox)
-  CLOUD_TOOLBOX_API_BASE    GitHub API base (default: https://api.github.com)
-  CLOUD_TOOLBOX_PYPI_BASE   PyPI JSON base (default: https://pypi.org)
-  CLOUD_TOOLBOX_UV_INSTALL_URL  uv standalone installer URL (default: https://astral.sh/uv/install.sh)
-  CLOUD_TOOLBOX_CURL        curl command override (used by tests)
+  CLI_TOOLBOX_HOME        install root (default: ~/.cli-toolbox)
+  CLI_TOOLBOX_API_BASE    GitHub API base (default: https://api.github.com)
+  CLI_TOOLBOX_PYPI_BASE   PyPI JSON base (default: https://pypi.org)
+  CLI_TOOLBOX_UV_INSTALL_URL  uv standalone installer URL (default: https://astral.sh/uv/install.sh)
+  CLI_TOOLBOX_CURL        curl command override (used by tests)
   CLOUD_CLI_REPO            cloud-cli repo for wrappers (default: ~/github/aktus-tk/cloud-cli)
   UV_TOOL_BIN_DIR           uv tool executable dir (default: ~/.local/bin)
   GITHUB_TOKEN              optional GitHub token to avoid API rate limits (never printed)
@@ -105,6 +108,63 @@ cmd_install() {
 }
 
 # ---------------------------------------------------------------------------
+# delete
+# ---------------------------------------------------------------------------
+
+cmd_delete() {
+    local clis=()
+    if [ $# -eq 0 ]; then
+        log_error "delete requires at least one CLI name"
+        log_error "example: cli-toolbox.sh delete glow gcloud"
+        return 2
+    fi
+    clis=("$@")
+
+    local name
+    for name in "${clis[@]}"; do
+        if ! is_known_cli "$name"; then
+            log_error "unknown CLI: $name"
+            log_error "supported: ${SUPPORTED_CLIS[*]}"
+            return 2
+        fi
+    done
+
+    local deleted=0 skipped=0 failed=0
+    local -a failed_names=()
+    local state detail
+    for name in "${clis[@]}"; do
+        run_uninstaller "$name"
+        state="${TB_STATE:-error}"
+        detail="${TB_DETAIL:-}"
+        printf '%-10s %-20s %s\n' "$name" "$state" "$detail"
+        case "$state" in
+            deleted) deleted=$((deleted + 1)) ;;
+            skipped-not-managed | skipped-system) skipped=$((skipped + 1)) ;;
+            *)
+                failed=$((failed + 1))
+                failed_names+=("$name")
+                ;;
+        esac
+    done
+
+    printf '\nDelete complete: %d deleted, %d skipped, %d failed\n' \
+        "$deleted" "$skipped" "$failed"
+    if [ "$failed" -gt 0 ]; then
+        local joined="" n
+        for n in "${failed_names[@]}"; do
+            if [ -n "$joined" ]; then
+                joined="${joined}, ${n}"
+            else
+                joined="$n"
+            fi
+        done
+        printf 'Failed: %s\n' "$joined"
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # doctor
 # ---------------------------------------------------------------------------
 
@@ -157,7 +217,7 @@ doctor_config() {
 doctor_one() {
     local name="$1" r=0
     local resolved="" exe="no" ver="" managed="no"
-    if [ -e "$CLOUD_TOOLBOX_HOME/bin/$name" ] || [ -L "$CLOUD_TOOLBOX_HOME/bin/$name" ]; then
+    if [ -e "$CLI_TOOLBOX_HOME/bin/$name" ] || [ -L "$CLI_TOOLBOX_HOME/bin/$name" ]; then
         managed="yes"
     fi
     resolved=$(resolve_path "$name") || resolved=""
@@ -212,12 +272,22 @@ cmd_doctor() {
         printf 'ERROR os/arch: unsupported (%s/%s)\n' "${TB_OS:-?}" "${TB_ARCH:-?}"
     fi
 
-    if printf ':%s:' "$PATH" | grep -Fq ":$CLOUD_TOOLBOX_HOME/bin:"; then
-        printf 'OK   PATH: %s/bin is on PATH\n' "$CLOUD_TOOLBOX_HOME"
+    if printf ':%s:' "$PATH" | grep -Fq ":$CLI_TOOLBOX_HOME/bin:"; then
+        printf 'OK   PATH: %s/bin is on PATH\n' "$CLI_TOOLBOX_HOME"
     else
         warns=$((warns + 1))
-        printf 'WARN PATH: %s/bin is not on PATH\n' "$CLOUD_TOOLBOX_HOME"
-        printf '     add: export PATH="%s/bin:$PATH"\n' "$CLOUD_TOOLBOX_HOME"
+        printf 'WARN PATH: %s/bin is not on PATH\n' "$CLI_TOOLBOX_HOME"
+        if [ "${TB_OS:-}" = "darwin" ]; then
+            printf '     add to ~/.zshrc: export PATH="%s/bin:$HOME/.local/bin:$PATH"\n' "$CLI_TOOLBOX_HOME"
+        else
+            printf '     add: export PATH="%s/bin:$PATH"\n' "$CLI_TOOLBOX_HOME"
+        fi
+    fi
+
+    if [ "${TB_OS:-}" = "darwin" ] && ! has_brew; then
+        warns=$((warns + 1))
+        printf 'WARN Homebrew is not installed (required for gh/az/aws on macOS)\n'
+        printf '     install: https://brew.sh\n'
     fi
 
     local tool_bin
@@ -234,10 +304,10 @@ cmd_doctor() {
     broken=$(detect_broken_symlinks)
     if [ -n "$broken" ]; then
         warns=$((warns + 1))
-        printf 'WARN broken symlinks in %s/bin:\n' "$CLOUD_TOOLBOX_HOME"
+        printf 'WARN broken symlinks in %s/bin:\n' "$CLI_TOOLBOX_HOME"
         printf '%s\n' "$broken" | sed 's/^/     /'
     else
-        printf 'OK   no broken symlinks in %s/bin\n' "$CLOUD_TOOLBOX_HOME"
+        printf 'OK   no broken symlinks in %s/bin\n' "$CLI_TOOLBOX_HOME"
     fi
 
     local name
@@ -299,6 +369,10 @@ main() {
         install)
             shift
             cmd_install "$@"
+            ;;
+        delete | remove | uninstall)
+            shift
+            cmd_delete "$@"
             ;;
         doctor)
             cmd_doctor

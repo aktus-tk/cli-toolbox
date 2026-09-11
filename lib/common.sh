@@ -5,10 +5,10 @@
 # Everything user-visible goes to stderr; stdout is reserved for machine
 # readable result lines and table output.
 
-if [ -z "${CLOUD_TOOLBOX_HOME:-}" ]; then
-    CLOUD_TOOLBOX_HOME="${HOME:-}/.cloud-toolbox"
+if [ -z "${CLI_TOOLBOX_HOME:-}" ]; then
+    CLI_TOOLBOX_HOME="${HOME:-}/.cli-toolbox"
 fi
-export CLOUD_TOOLBOX_HOME
+export CLI_TOOLBOX_HOME
 
 # Keep a list of temp dirs created with make_tempdir; removed on exit.
 __TB_TEMPDIRS=()
@@ -41,6 +41,10 @@ cmd_exists() {
 # Sets TB_OS (linux|darwin) and TB_ARCH (amd64|arm64). Exports them.
 # Returns non-zero on unsupported OS/arch.
 detect_platform() {
+    if [ -n "${TB_OS:-}" ] && [ -n "${TB_ARCH:-}" ]; then
+        export TB_OS TB_ARCH
+        return 0
+    fi
     local os arch
     os=$(uname -s 2>/dev/null)
     arch=$(uname -m 2>/dev/null)
@@ -149,17 +153,17 @@ _parse_version() {
 }
 
 # ---------------------------------------------------------------------------
-# download helpers (curl; overridable via CLOUD_TOOLBOX_CURL)
+# download helpers (curl; overridable via CLI_TOOLBOX_CURL)
 # ---------------------------------------------------------------------------
 
 http_get() {
     local url="$1"
-    "${CLOUD_TOOLBOX_CURL:-curl}" -fsSL --retry 3 --connect-timeout 10 "$url" 2>/dev/null
+    "${CLI_TOOLBOX_CURL:-curl}" -fsSL --retry 3 --connect-timeout 10 "$url" 2>/dev/null
 }
 
 download_file() {
     local url="$1" dest="$2"
-    "${CLOUD_TOOLBOX_CURL:-curl}" -fL --retry 3 --connect-timeout 10 -o "$dest" "$url" 2>/dev/null
+    "${CLI_TOOLBOX_CURL:-curl}" -fL --retry 3 --connect-timeout 10 -o "$dest" "$url" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -173,14 +177,14 @@ download_file() {
 # https:// and file:// URLs (file:// reports http_code 000, which is ignored).
 github_release_json() {
     local repo="$1"
-    local url="${CLOUD_TOOLBOX_API_BASE:-https://api.github.com}/repos/${repo}/releases/latest"
+    local url="${CLI_TOOLBOX_API_BASE:-https://api.github.com}/repos/${repo}/releases/latest"
     local body code rc
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        body=$("${CLOUD_TOOLBOX_CURL:-curl}" -sSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+        body=$("${CLI_TOOLBOX_CURL:-curl}" -sSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             --connect-timeout 10 --retry 2 -w $'\n%{http_code}' "$url" 2>/dev/null)
         rc=$?
     else
-        body=$("${CLOUD_TOOLBOX_CURL:-curl}" -sSL --connect-timeout 10 --retry 2 \
+        body=$("${CLI_TOOLBOX_CURL:-curl}" -sSL --connect-timeout 10 --retry 2 \
             -w $'\n%{http_code}' "$url" 2>/dev/null)
         rc=$?
     fi
@@ -287,7 +291,7 @@ pypi_version_from_body() {
 # get_latest_version_pypi <pkg>
 get_latest_version_pypi() {
     local pkg="$1" body
-    body=$(http_get "${CLOUD_TOOLBOX_PYPI_BASE:-https://pypi.org}/pypi/${pkg}/json") || return 1
+    body=$(http_get "${CLI_TOOLBOX_PYPI_BASE:-https://pypi.org}/pypi/${pkg}/json") || return 1
     pypi_version_from_body "$body"
 }
 
@@ -522,23 +526,74 @@ atomic_symlink() {
 # paths and managed detection
 # ---------------------------------------------------------------------------
 
+# resolve_real_path <path>: canonical path without GNU readlink -f (macOS-safe).
+resolve_real_path() {
+    local path="$1" next dir base
+    [ -n "$path" ] || return 1
+    case "$path" in
+        /*) ;;
+        *) path="$(pwd)/$path" ;;
+    esac
+    dir=$(dirname "$path")
+    base=$(basename "$path")
+    dir=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
+    path="$dir/$base"
+    while [ -L "$path" ]; do
+        next=$(readlink "$path") || return 1
+        case "$next" in
+            /*) path="$next" ;;
+            *) path="$(dirname "$path")/$next" ;;
+        esac
+        dir=$(dirname "$path")
+        base=$(basename "$path")
+        dir=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
+        path="$dir/$base"
+    done
+    printf '%s\n' "$path"
+}
+
+# find_file_limited <root> <maxdepth> <filename>: first matching file path.
+find_file_limited() {
+    local root="$1" max="$2" name="$3"
+    _find_file_at_depth() {
+        local dir="$1" d="$2" entry
+        if [ "$d" -gt "$max" ]; then
+            return 1
+        fi
+        for entry in "$dir"/*; do
+            [ -e "$entry" ] || continue
+            if [ -f "$entry" ] && [ "$(basename "$entry")" = "$name" ]; then
+                printf '%s\n' "$entry"
+                return 0
+            fi
+            if [ -d "$entry" ] && [ "$d" -lt "$max" ]; then
+                if _find_file_at_depth "$entry" $((d + 1)); then
+                    return 0
+                fi
+            fi
+        done
+        return 1
+    }
+    _find_file_at_depth "$root" 0
+}
+
 # resolve_path <cli>: first match of the CLI name on the current PATH.
 resolve_path() {
     local cli="$1"
     command -v "$cli" 2>/dev/null
 }
 
-# is_managed <path>: true if path is inside $CLOUD_TOOLBOX_HOME.
+# is_managed <path>: true if path is inside $CLI_TOOLBOX_HOME.
 is_managed() {
     case "$1" in
-        "$CLOUD_TOOLBOX_HOME"/*) return 0 ;;
+        "$CLI_TOOLBOX_HOME"/*) return 0 ;;
         *) return 1 ;;
     esac
 }
 
 # detect_broken_symlinks: list basenames of broken symlinks in bin (one per line).
 detect_broken_symlinks() {
-    local bin="$CLOUD_TOOLBOX_HOME/bin" l
+    local bin="$CLI_TOOLBOX_HOME/bin" l
     [ -d "$bin" ] || return 0
     for l in "$bin"/*; do
         [ -L "$l" ] || continue
