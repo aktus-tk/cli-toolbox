@@ -6,12 +6,15 @@
 set -u
 
 TB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export TB_ROOT
 # shellcheck source=lib/common.sh
 . "$TB_ROOT/lib/common.sh"
 # shellcheck source=lib/packages.sh
 . "$TB_ROOT/lib/packages.sh"
 # shellcheck source=lib/providers.sh
 . "$TB_ROOT/lib/providers.sh"
+# shellcheck source=lib/targets.sh
+. "$TB_ROOT/lib/targets.sh"
 # shellcheck source=lib/installers.sh
 . "$TB_ROOT/lib/installers.sh"
 
@@ -22,25 +25,17 @@ cli-toolbox.sh — idempotent installer for cloud/ops CLIs
 Usage:
   cli-toolbox.sh install [CLI...]   converge CLIs to official stable-latest (install or update)
   cli-toolbox.sh delete [CLI...]    remove cli-toolbox managed installs (system apt/brew untouched)
-  cli-toolbox.sh doctor             check environment and installed CLIs
+  cli-toolbox.sh doctor             check environment and installed CLIs from targets.txt
   cli-toolbox.sh list [CLI...]      show status table (CLI, status, current, latest, path, provider, state)
   cli-toolbox.sh help               show this help
 
-Standard set (used when `install` is run without arguments):
-  uv gh glow coscli tccli aws gcloud az
+When install, list, or doctor is run without CLI arguments, targets.txt in the repo root is used.
 
-Optional wrappers (from cloud-cli repo):
-  awst gcloudt tcclit
+Supported CLIs (install explicitly when omitted from targets.txt):
+  glow coscli rg mlr awst gcloudt tcclit
 
-Environment:
-  CLI_TOOLBOX_HOME        install root (default: ~/.cli-toolbox)
-  CLI_TOOLBOX_API_BASE    GitHub API base (default: https://api.github.com)
-  CLI_TOOLBOX_PYPI_BASE   PyPI JSON base (default: https://pypi.org)
-  CLI_TOOLBOX_UV_INSTALL_URL  uv standalone installer URL (default: https://astral.sh/uv/install.sh)
-  CLI_TOOLBOX_CURL        curl command override (used by tests)
-  CLOUD_CLI_REPO            cloud-cli repo for wrappers (default: ~/github/aktus-tk/cloud-cli)
-  UV_TOOL_BIN_DIR           uv tool executable dir (default: ~/.local/bin)
-  GITHUB_TOKEN              optional GitHub token to avoid API rate limits (never printed)
+AI agent CLIs (also listed in targets.txt by default):
+  opencode agent (Cursor Agent CLI) codebuddy claude codex agy
 EOF
 }
 
@@ -50,35 +45,22 @@ EOF
 
 cmd_install() {
     local clis=()
-    if [ $# -eq 0 ]; then
-        clis=("${STANDARD_SET[@]}")
-    else
-        clis=("$@")
+    if ! resolve_command_clis 1 "$@"; then
+        return $?
     fi
-
-    # Validate: unknown names are an error before anything runs.
-    local name
-    for name in "${clis[@]}"; do
-        if ! is_known_cli "$name"; then
-            log_error "unknown CLI: $name"
-            log_error "supported: ${SUPPORTED_CLIS[*]}"
-            log_error "recognized but unsupported: ${UNSUPPORTED_CLIS[*]}"
-            return 2
-        fi
-    done
+    clis=("${TB_COMMAND_CLIS[@]}")
+    validate_cli_names "${clis[@]}" || return $?
 
     require_cmd curl
 
     local installed=0 updated=0 unchanged=0 failed=0
     local -a failed_names=()
-    local state detail
+    local state detail name
     for name in "${clis[@]}"; do
-        # Called directly (not via $(...)) so make_tempdir's cleanup registry
-        # lives in this process and the EXIT trap removes temp dirs.
         run_installer "$name"
         state="${TB_STATE:-error}"
         detail="${TB_DETAIL:-}"
-        printf '%-10s %-10s %s\n' "$name" "$state" "$detail"
+        printf '%-10s %-10s %s\n' "$(cli_display_name "$name")" "$state" "$detail"
         case "$state" in
             installed) installed=$((installed + 1)) ;;
             updated) updated=$((updated + 1)) ;;
@@ -98,7 +80,7 @@ cmd_install() {
             if [ -n "$joined" ]; then
                 joined="${joined}, ${n}"
             else
-                joined="$n"
+                joined="$(cli_display_name "$n")"
             fi
         done
         printf 'Failed: %s\n' "$joined"
@@ -119,24 +101,16 @@ cmd_delete() {
         return 2
     fi
     clis=("$@")
-
-    local name
-    for name in "${clis[@]}"; do
-        if ! is_known_cli "$name"; then
-            log_error "unknown CLI: $name"
-            log_error "supported: ${SUPPORTED_CLIS[*]}"
-            return 2
-        fi
-    done
+    validate_cli_names "${clis[@]}" || return $?
 
     local deleted=0 skipped=0 failed=0
     local -a failed_names=()
-    local state detail
+    local state detail name
     for name in "${clis[@]}"; do
         run_uninstaller "$name"
         state="${TB_STATE:-error}"
         detail="${TB_DETAIL:-}"
-        printf '%-10s %-20s %s\n' "$name" "$state" "$detail"
+        printf '%-10s %-20s %s\n' "$(cli_display_name "$name")" "$state" "$detail"
         case "$state" in
             deleted) deleted=$((deleted + 1)) ;;
             skipped-not-managed | skipped-system) skipped=$((skipped + 1)) ;;
@@ -155,7 +129,7 @@ cmd_delete() {
             if [ -n "$joined" ]; then
                 joined="${joined}, ${n}"
             else
-                joined="$n"
+                joined="$(cli_display_name "$n")"
             fi
         done
         printf 'Failed: %s\n' "$joined"
@@ -201,59 +175,89 @@ doctor_config() {
                 what="AZURE_CONFIG_DIR/~/.azure"
             fi
             ;;
+        terraform)
+            if [ -n "${TF_CLI_CONFIG_FILE:-}" ] || [ -f "$HOME/.terraformrc" ] \
+                || [ -d "$HOME/.terraform.d" ]; then
+                found=yes
+                what="TF_CLI_CONFIG_FILE/~/.terraformrc/~/.terraform.d"
+            fi
+            ;;
+        kubectl)
+            if [ -n "${KUBECONFIG:-}" ] || [ -f "$HOME/.kube/config" ]; then
+                found=yes
+                what="KUBECONFIG/~/.kube/config"
+            fi
+            ;;
+        helm)
+            if [ -n "${HELM_CACHE_HOME:-}" ] || [ -d "$HOME/.config/helm" ]; then
+                found=yes
+                what="HELM_CACHE_HOME/~/.config/helm"
+            fi
+            ;;
+        oci)
+            if [ -n "${OCI_CLI_CONFIG:-}" ] || [ -f "$HOME/.oci/config" ]; then
+                found=yes
+                what="OCI_CLI_CONFIG/~/.oci/config"
+            fi
+            ;;
+        opencode | agent | codebuddy | claude | codex | agy)
+            printf 'OK   %-10s config: n/a (auth not managed by cli-toolbox)\n' "$(cli_display_name "$name")"
+            return 0
+            ;;
         *)
             printf 'OK   %-10s config: n/a\n' "$name"
             return 0
             ;;
     esac
     if [ "$found" = "yes" ]; then
-        printf 'OK   %-10s config present (%s)\n' "$name" "$what"
+        printf 'OK   %-10s config present (%s)\n' "$(cli_display_name "$name")" "$what"
     else
-        printf 'WARN %-10s no config/env found (%s)\n' "$name" "$what"
+        printf 'WARN %-10s no config/env found (%s)\n' "$(cli_display_name "$name")" "$what"
     fi
 }
 
 # doctor_one <cli>: prints OK/WARN/ERROR lines; returns 1 only on ERROR.
 doctor_one() {
     local name="$1" r=0
-    local resolved="" exe="no" ver="" managed="no"
+    local resolved="" exe="no" ver="" managed="no" label=""
+    label=$(cli_display_name "$name")
     if [ -e "$CLI_TOOLBOX_HOME/bin/$name" ] || [ -L "$CLI_TOOLBOX_HOME/bin/$name" ]; then
         managed="yes"
     fi
     resolved=$(resolve_path "$name") || resolved=""
     if [ -z "$resolved" ]; then
-        printf 'ERROR %-10s not found on PATH — install with: cli-toolbox.sh install %s\n' "$name" "$name"
+        printf 'ERROR %-10s not found on PATH — install with: cli-toolbox.sh install %s\n' "$label" "$name"
         return 1
     fi
     [ -x "$resolved" ] && exe="yes"
     ver=$(_parse_version "$name" "$resolved")
     printf 'OK   %-10s path=%s managed=%s executable=%s version=%s\n' \
-        "$name" "$resolved" "$managed" "$exe" "${ver:-?}"
+        "$label" "$resolved" "$managed" "$exe" "${ver:-?}"
     if [ "$exe" = "no" ]; then
-        printf 'ERROR %-10s not executable\n' "$name"
+        printf 'ERROR %-10s not executable\n' "$label"
         r=1
     fi
     if [ -z "$ver" ]; then
-        printf 'WARN %-10s version could not be determined\n' "$name"
+        printf 'WARN %-10s version could not be determined\n' "$label"
     fi
     if [ "$managed" = "yes" ] && ! is_managed "$resolved"; then
-        printf 'WARN %-10s another same-name CLI earlier in PATH shadows the managed binary\n' "$name"
+        printf 'WARN %-10s another same-name CLI earlier in PATH shadows the managed binary\n' "$label"
     fi
     case "$name" in
         tccli)
             if uv_tool_has tccli; then
-                printf 'OK   %-10s managed by uv tool\n' "$name"
+                printf 'OK   %-10s managed by uv tool\n' "$label"
             elif cmd_exists uv; then
-                printf 'WARN %-10s not yet installed via uv tool\n' "$name"
+                printf 'WARN %-10s not yet installed via uv tool\n' "$label"
             else
-                printf 'WARN %-10s uv not found (required for tccli)\n' "$name"
+                printf 'WARN %-10s uv not found (required for tccli)\n' "$label"
             fi
             ;;
         uv)
             if cmd_exists uv; then
-                printf 'OK   %-10s uv present\n' "$name"
+                printf 'OK   %-10s uv present\n' "$label"
             else
-                printf 'ERROR %-10s uv missing\n' "$name"
+                printf 'ERROR %-10s uv missing\n' "$label"
                 r=1
             fi
             ;;
@@ -263,7 +267,13 @@ doctor_one() {
 }
 
 cmd_doctor() {
-    local rc=0 warns=0 errs=0
+    local rc=0 warns=0 errs=0 name
+    local -a clis=()
+    if ! resolve_command_clis 1; then
+        return $?
+    fi
+    clis=("${TB_COMMAND_CLIS[@]}")
+
     if detect_platform; then
         printf 'OK   os/arch: %s/%s\n' "$TB_OS" "$TB_ARCH"
     else
@@ -310,8 +320,7 @@ cmd_doctor() {
         printf 'OK   no broken symlinks in %s/bin\n' "$CLI_TOOLBOX_HOME"
     fi
 
-    local name
-    for name in "${STANDARD_SET[@]}"; do
+    for name in "${clis[@]}"; do
         if ! doctor_one "$name"; then
             rc=1
             errs=$((errs + 1))
@@ -329,7 +338,7 @@ cmd_doctor() {
 list_one() {
     local name="$1"
     inspect_cli "$name" || true
-    format_list_row "$name" \
+    format_list_row "$(cli_display_name "$name")" \
         "${TB_LIST_STATUS}" \
         "${TB_LIST_CURRENT:--}" \
         "${TB_LIST_LATEST:--}" \
@@ -340,17 +349,11 @@ list_one() {
 
 cmd_list() {
     local clis=() name="" rows=""
-    if [ $# -eq 0 ]; then
-        clis=("${SUPPORTED_CLIS[@]}")
-    else
-        clis=("$@")
-        for name in "${clis[@]}"; do
-            if ! is_known_cli "$name"; then
-                log_error "unknown CLI: $name (supported: ${SUPPORTED_CLIS[*]})"
-                return 2
-            fi
-        done
+    if ! resolve_command_clis 1 "$@"; then
+        return $?
     fi
+    clis=("${TB_COMMAND_CLIS[@]}")
+    validate_cli_names "${clis[@]}" || return $?
     for name in "${clis[@]}"; do
         rows+="$(list_one "$name")"
         rows+=$'\n'

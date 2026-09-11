@@ -3,8 +3,8 @@
 クラウド/運用CLIを、ユーザー領域へ冪等に導入するツールです。Terraform の `apply` のような振る舞いをします。
 
 ```bash
-./cli-toolbox.sh install            # 標準セットを stable 最新版へ収束（インストール＋更新）
-./cli-toolbox.sh install gh glow    # 指定したCLIだけ収束
+./cli-toolbox.sh install            # targets.txt の CLI を stable 最新版へ収束
+./cli-toolbox.sh install aws codex  # 指定した CLI だけ収束
 ./cli-toolbox.sh delete glow gcloud # cli-toolbox 管理分のみ削除
 ./cli-toolbox.sh doctor             # 環境と導入済みCLIの健康診断
 ./cli-toolbox.sh list               # 各CLIの状態一覧
@@ -23,8 +23,8 @@
 
 | OS | アーキテクチャ | パッケージ管理 |
 |---|---|---|
-| Linux (Debian/Ubuntu) | amd64 / arm64 | APT (`gh`, `az`) |
-| macOS | amd64 / arm64 (Intel / Apple Silicon) | Homebrew (`gh`, `az`, `aws`) |
+| Linux (Debian/Ubuntu) | amd64 / arm64 | APT (`gh`, `az`, `terraform`) |
+| macOS | amd64 / arm64 (Intel / Apple Silicon) | Homebrew (`gh`, `az`, `aws`, `terraform`) |
 
 - **gcloud** は Linux/macOS とも公式 archive（tar.gz）をユーザー領域へ展開します（APT/Homebrew 非依存）
 - **uv / tccli** は全 OS で共通（`uv` standalone + `uv tool`）
@@ -63,9 +63,9 @@ export PATH="$HOME/github/aktus-tk/cli-toolbox:$PATH"
 cli-toolbox.sh install
 ```
 
-導入先はデフォルトで `~/.cli-toolbox` です。`CLI_TOOLBOX_HOME` で変更できます。
+導入先は `~/.cli-toolbox` です。
 
-旧名 `~/.cloud-toolbox` / `CLOUD_TOOLBOX_*` から移行する場合は、ディレクトリをリネームするか再インストールしてください。
+旧名 `~/.cloud-toolbox` から移行する場合は、ディレクトリをリネームするか再インストールしてください。
 
 ```bash
 mv ~/.cloud-toolbox ~/.cli-toolbox   # 既存の導入を引き継ぐ場合
@@ -88,7 +88,7 @@ mv ~/.cloud-toolbox ~/.cli-toolbox   # 既存の導入を引き継ぐ場合
     └── current -> versions/<version>
 ```
 
-`tccli`（uv tool）は `~/.local/bin` に配置されます。`UV_TOOL_BIN_DIR` で変更できます。
+`tccli`（uv tool）は `~/.local/bin` に配置されます。
 
 ## PATH 設定
 
@@ -110,7 +110,7 @@ export PATH="$HOME/.cli-toolbox/bin:$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 
 ```bash
 ./cli-toolbox.sh install
-./cli-toolbox.sh install tccli aws
+./cli-toolbox.sh install tccli aws glow
 ./cli-toolbox.sh delete glow gcloud
 ./cli-toolbox.sh doctor
 ./cli-toolbox.sh list
@@ -142,7 +142,7 @@ export PATH="$HOME/.cli-toolbox/bin:$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 | 列 | 意味 |
 |---|---|
 | STATUS | `managed` / `system` / `missing` / `requires-root` / `requires-package-manager` / `unsupported` |
-| PROVIDER | `uv-tool` / `official-installer` / `official-archive` / `apt` / `brew` / `release-binary` / `local-wrapper` / `system-package` / `unknown` |
+| PROVIDER | 主に `uv-tool` / `official-installer` / `official-archive` / `apt` / `brew` / `release-binary` / `local-wrapper` / `system-package` / `unknown`（既存環境では `pipx` 等も表示される場合あり） |
 | STATE | `unchanged` / `update-available` / `install-required` / `migration-available` / `unknown` |
 
 例:
@@ -157,10 +157,39 @@ az       missing  -         2.77.0   -                            apt
 
 `requires-root` は Linux APT 導入に `sudo` が必要な状態です。`requires-package-manager` は macOS で Homebrew が未導入の状態です。
 
-## 標準セット
+## targets.txt と optional
+
+引数なしの `install` / `list` / `doctor` は、リポジトリ直下の `targets.txt` を使います。
+
+```text
+# Core cloud/ops CLIs
+uv
+gh
+tccli
+aws
+gcloud
+az
+terraform
+kubectl
+helm
+# oci
+
+# AI agents
+opencode
+agent       # Cursor Agent CLI
+codebuddy
+claude
+codex
+agy
+```
+
+- 1行1CLI、空行と `#` 行頭コメントを無視、行末 `# コメント` を除去
+- `targets.txt` から外した CLI は自動削除されません（`delete` で明示削除）
+
+`SUPPORTED_CLIS` に含まれるが `targets.txt` に無い CLI（明示指定でインストール）:
 
 ```bash
-uv gh glow coscli tccli aws gcloud az
+glow coscli rg mlr awst gcloudt tcclit
 ```
 
 ## CLI ごとの管理方式（provider 選択表）
@@ -173,17 +202,25 @@ uv gh glow coscli tccli aws gcloud az
 | `gh` | apt | brew |
 | `gcloud` | official-archive | official-archive |
 | `az` | apt | brew |
+| `terraform` | apt (HashiCorp) | brew (`hashicorp/tap`) |
+| `kubectl` | release-binary | release-binary |
+| `helm` | release-binary | release-binary |
+| `oci` | official-installer | brew（未導入時は official-installer） |
 | `glow` | release-binary | brew（未導入時は release-binary） |
 | `coscli` | release-binary | release-binary |
+| `rg` | release-binary | brew（未導入時は release-binary） |
+| `mlr` | release-binary | brew（未導入時は release-binary） |
+| `opencode` | release-binary | brew（未導入時は release-binary） |
+| `agent` (Cursor Agent CLI) | official-installer | official-installer |
+| `codebuddy` | official-installer / brew | brew（未導入時は official-installer） |
+| `claude` | official-installer | official-installer |
+| `codex` | official-installer | official-installer |
+| `agy` | official-installer | official-installer |
 | `awst` / `gcloudt` / `tcclit` | local-wrapper | local-wrapper |
 
 ### cloud-cli wrapper
 
-`awst` / `gcloudt` / `tcclit` は外部配布 CLI ではなく、[cloud-cli](https://github.com/aktus-tk/cloud-cli) 内の wrapper です。
-
-- デフォルト: `~/github/aktus-tk/cloud-cli`
-- 変更: `CLOUD_CLI_REPO=/path/to/cloud-cli`
-- 配置後、依存する native CLI（`aws` / `gcloud` / `tccli`）の存在を確認します
+`awst` / `gcloudt` / `tcclit` は外部配布 CLI ではなく、[cloud-cli](https://github.com/aktus-tk/cloud-cli) 内の wrapper です。デフォルトでは `~/github/aktus-tk/cloud-cli` を参照します。配置後、依存する native CLI（`aws` / `gcloud` / `tccli`）の存在を確認します。
 
 | Wrapper | 依存 |
 |---|---|
@@ -210,4 +247,4 @@ uv gh glow coscli tccli aws gcloud az
 bash tests/test.sh
 ```
 
-オフラインで実行でき、実 `$HOME` の既存 CLI は変更しません（各テストは一時 `CLI_TOOLBOX_HOME` を使用）。OS / package manager は mock 可能です。
+オフラインで実行でき、実 `$HOME` の既存 CLI は変更しません。OS / package manager は mock 可能です。

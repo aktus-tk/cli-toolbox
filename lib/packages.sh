@@ -16,6 +16,12 @@ cli_package_name() {
                 az) printf '%s' "azure-cli" ;;
                 aws) printf '%s' "awscli" ;;
                 glow) printf '%s' "glow" ;;
+                rg) printf '%s' "ripgrep" ;;
+                mlr) printf '%s' "miller" ;;
+                opencode) printf '%s' "opencode" ;;
+                codebuddy) printf '%s' "codebuddy-code" ;;
+                terraform) printf '%s' "terraform" ;;
+                oci) printf '%s' "oci-cli" ;;
             esac
             ;;
         brew-cask)
@@ -99,6 +105,7 @@ apt_repo_host() {
     case "$1" in
         gh) printf '%s' "cli.github.com" ;;
         az) printf '%s' "packages.microsoft.com/repos/azure-cli" ;;
+        terraform) printf '%s' "apt.releases.hashicorp.com" ;;
     esac
 }
 
@@ -113,6 +120,7 @@ apt_source_list() {
                 printf '%s' "/etc/apt/sources.list.d/azure-cli.list"
             fi
             ;;
+        terraform) printf '%s' "/etc/apt/sources.list.d/hashicorp.list" ;;
     esac
 }
 
@@ -201,11 +209,43 @@ apt_setup_repo_az() {
     return 0
 }
 
+apt_setup_repo_hashicorp() {
+    local tmp codename=""
+    apt_run mkdir -p -m 755 /etc/apt/keyrings
+    if ! make_tempdir; then
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    if ! download_file "https://apt.releases.hashicorp.com/gpg" "$tmp/hashicorp.asc"; then
+        log_error "failed to download HashiCorp apt signing key"
+        return 1
+    fi
+    if ! gpg --dearmor --yes -o "$tmp/hashicorp.gpg" "$tmp/hashicorp.asc" 2>/dev/null; then
+        log_error "failed to dearmor HashiCorp apt signing key"
+        return 1
+    fi
+    apt_run cp "$tmp/hashicorp.gpg" /etc/apt/keyrings/hashicorp-archive-keyring.gpg
+    apt_run chmod go+r /etc/apt/keyrings/hashicorp-archive-keyring.gpg
+    codename=$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")
+    if [ -z "$codename" ] && cmd_exists lsb_release; then
+        codename=$(lsb_release -cs 2>/dev/null)
+    fi
+    if [ -z "$codename" ]; then
+        log_error "cannot determine apt suite codename for HashiCorp repository"
+        return 1
+    fi
+    printf '%s\n' \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com ${codename} main" \
+        | apt_run tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
+    return 0
+}
+
 apt_ensure_repo() {
     local cli="$1"
     case "$cli" in
         gh) apt_setup_repo_gh || return 1 ;;
         az) apt_setup_repo_az || return 1 ;;
+        terraform) apt_setup_repo_hashicorp || return 1 ;;
     esac
     return 0
 }
@@ -254,13 +294,21 @@ sys.exit(1)
 }
 
 brew_install_or_upgrade() {
-    local pkg="$1" brew="" installed=""
+    local pkg="$1" brew="" installed="" formula=""
     brew=$(brew_bin) || return 1
+    formula="$pkg"
+    if [ "$pkg" = "terraform" ]; then
+        "$brew" tap hashicorp/tap >/dev/null 2>&1 || true
+        formula="hashicorp/tap/terraform"
+    elif [ "$pkg" = "codebuddy-code" ]; then
+        "$brew" tap Tencent-CodeBuddy/tap >/dev/null 2>&1 || true
+        formula="Tencent-CodeBuddy/tap/codebuddy-code"
+    fi
     installed=$(brew_installed_version "$pkg")
     if [ -n "$installed" ]; then
-        "$brew" upgrade "$pkg" >/dev/null 2>&1
+        "$brew" upgrade "$formula" >/dev/null 2>&1
     else
-        "$brew" install "$pkg" >/dev/null 2>&1
+        "$brew" install "$formula" >/dev/null 2>&1
     fi
 }
 

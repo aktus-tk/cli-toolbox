@@ -129,6 +129,60 @@ _parse_version() {
         coscli)
             out=$("$path" --version 2>/dev/null | sed -n 's/.*coscli version v\?\([0-9][^ ]*\).*/\1/p' | head -1)
             ;;
+        rg)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^ripgrep \([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        mlr)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^mlr \([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        opencode)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^opencode version \([0-9][^ ]*\).*/\1/p' | head -1)
+            if [ -z "$out" ]; then
+                out=$("$path" --version 2>/dev/null | sed -n 's/^\([0-9][^ ]*\).*/\1/p' | head -1)
+            fi
+            ;;
+        agent)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^agent version \([0-9][^ ]*\).*/\1/p' | head -1)
+            if [ -z "$out" ]; then
+                out=$("$path" --version 2>/dev/null | sed -n '1s/^[[:space:]]*\([0-9][0-9A-Za-z._-]*\).*/\1/p')
+            fi
+            ;;
+        codebuddy)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^codebuddy version \([0-9][^ ]*\).*/\1/p' | head -1)
+            if [ -z "$out" ]; then
+                out=$("$path" --version 2>/dev/null | sed -n 's/^\([0-9][^ ]*\).*/\1/p' | head -1)
+            fi
+            ;;
+        claude)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^claude version \([0-9][^ ]*\).*/\1/p' | head -1)
+            if [ -z "$out" ]; then
+                out=$("$path" --version 2>/dev/null | sed -n 's/^\([0-9][^ ]*\).*/\1/p' | head -1)
+            fi
+            ;;
+        codex)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^codex version \([0-9][^ ]*\).*/\1/p' | head -1)
+            if [ -z "$out" ]; then
+                out=$("$path" --version 2>/dev/null | sed -n 's/^\([0-9][^ ]*\).*/\1/p' | head -1)
+            fi
+            ;;
+        agy)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^\([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        kubectl)
+            out=$("$path" version --client 2>/dev/null \
+                | sed -n 's/.*Client Version: v\?\([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        helm)
+            out=$("$path" version --short 2>/dev/null | sed -n 's/^v\?\([0-9][^ ]*\).*/\1/p' | head -1)
+            if [ -z "$out" ]; then
+                out=$("$path" version 2>/dev/null \
+                    | sed -n 's/.*Version:"\([^"]*\)".*/\1/p' | head -1)
+                out=$(normalize_version "$out")
+            fi
+            ;;
+        oci)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^\([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
         uv)
             out=$("$path" --version 2>/dev/null | sed -n 's/.*uv \([0-9][^ ]*\).*/\1/p' | head -1)
             ;;
@@ -143,6 +197,9 @@ _parse_version() {
             ;;
         az)
             out=$("$path" version 2>/dev/null | sed -n 's/.*azure-cli \([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        terraform)
+            out=$("$path" version 2>/dev/null | sed -n 's/^Terraform v\([0-9][^ ]*\).*/\1/p' | head -1)
             ;;
         awst | gcloudt | tcclit)
             out="wrapper"

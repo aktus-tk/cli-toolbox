@@ -293,6 +293,13 @@ install_az() {
     install_package_cli az "$provider"
 }
 
+install_terraform() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider terraform "$TB_OS")
+    install_package_cli terraform "$provider"
+}
+
 install_brew_cli() {
     install_package_cli "$1" brew
 }
@@ -415,8 +422,44 @@ install_gcloud() {
 }
 
 # ---------------------------------------------------------------------------
-# glow / coscli — GitHub release binaries (or brew for glow on macOS)
+# GitHub release binaries (or brew on macOS when available)
 # ---------------------------------------------------------------------------
+
+_rg_release_asset() {
+    local ver="$1" os="$2" arch="$3"
+    case "$os" in
+        linux)
+            case "$arch" in
+                amd64) printf 'ripgrep-%s-x86_64-unknown-linux-musl.tar.gz' "$ver" ;;
+                arm64) printf 'ripgrep-%s-aarch64-unknown-linux-musl.tar.gz' "$ver" ;;
+            esac
+            ;;
+        darwin)
+            case "$arch" in
+                amd64) printf 'ripgrep-%s-x86_64-apple-darwin.tar.gz' "$ver" ;;
+                arm64) printf 'ripgrep-%s-aarch64-apple-darwin.tar.gz' "$ver" ;;
+            esac
+            ;;
+    esac
+}
+
+_mlr_release_asset() {
+    local ver="$1" os="$2" arch="$3"
+    case "$os" in
+        linux)
+            case "$arch" in
+                amd64) printf 'miller-%s-linux-amd64.tar.gz' "$ver" ;;
+                arm64) printf 'miller-%s-linux-arm64.tar.gz' "$ver" ;;
+            esac
+            ;;
+        darwin)
+            case "$arch" in
+                amd64) printf 'miller-%s-darwin-amd64.tar.gz' "$ver" ;;
+                arm64) printf 'miller-%s-darwin-arm64.tar.gz' "$ver" ;;
+            esac
+            ;;
+    esac
+}
 
 install_glow() {
     local provider=""
@@ -533,6 +576,538 @@ install_coscli() {
     ver=$(get_installed_version coscli)
     manifest_record coscli release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/coscli"
     _finish_install coscli "$installed" "$ver"
+}
+
+install_rg() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider rg "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli rg brew
+        return $?
+    fi
+    TB_STATE=error
+    TB_DETAIL=""
+    local body latest installed asset tag asset_url checksum_url cktext expected tmp src ver
+    body=$(github_release_json BurntSushi/ripgrep) || { TB_DETAIL="cannot determine latest version"; return 1; }
+    latest=$(github_version_from_json "$body") || { TB_DETAIL="cannot determine latest version"; return 1; }
+    installed=$(get_installed_version rg)
+    if [ -n "$installed" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        return 0
+    fi
+    asset=$(_rg_release_asset "$latest" "$TB_OS" "$TB_ARCH")
+    [ -n "$asset" ] || { TB_DETAIL="unsupported platform"; return 1; }
+    tag="$latest"
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    asset_url=$(github_asset_url BurntSushi/ripgrep "$tag" "$asset" "$body")
+    checksum_url=$(github_asset_url BurntSushi/ripgrep "$tag" "${asset}.sha256" "$body")
+    log_info "rg: downloading ${asset_url}"
+    if ! download_file "$checksum_url" "$tmp/checksums.sha256"; then
+        TB_DETAIL="download failed (checksums)"
+        return 1
+    fi
+    cktext=$(<"$tmp/checksums.sha256")
+    expected=$(checksum_for "$cktext" "$asset") || { TB_DETAIL="checksum entry not found for ${asset}"; return 1; }
+    if ! download_file "$asset_url" "$tmp/$asset"; then
+        TB_DETAIL="download failed"
+        return 1
+    fi
+    if ! verify_sha256 "$tmp/$asset" "$expected"; then
+        TB_DETAIL="checksum mismatch"
+        return 1
+    fi
+    if ! extract_archive "$tmp/$asset" "$tmp/x"; then
+        TB_DETAIL="extraction failed"
+        return 1
+    fi
+    src=$(_find_in_archive "$tmp/x" rg "${asset%.tar.gz}")
+    [ -n "$src" ] || { TB_DETAIL="binary not found in archive"; return 1; }
+    if ! atomic_install "$src" "$CLI_TOOLBOX_HOME/bin/rg"; then
+        TB_DETAIL="failed to place binary"
+        return 1
+    fi
+    ver=$(get_installed_version rg)
+    manifest_record rg release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/rg"
+    _finish_install rg "$installed" "$ver"
+}
+
+install_mlr() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider mlr "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli mlr brew
+        return $?
+    fi
+    TB_STATE=error
+    TB_DETAIL=""
+    local body latest installed asset tag asset_url checksum_url cktext expected tmp src ver
+    body=$(github_release_json johnkerl/miller) || { TB_DETAIL="cannot determine latest version"; return 1; }
+    latest=$(github_version_from_json "$body") || { TB_DETAIL="cannot determine latest version"; return 1; }
+    installed=$(get_installed_version mlr)
+    if [ -n "$installed" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        return 0
+    fi
+    asset=$(_mlr_release_asset "$latest" "$TB_OS" "$TB_ARCH")
+    [ -n "$asset" ] || { TB_DETAIL="unsupported platform"; return 1; }
+    tag="v${latest}"
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    asset_url=$(github_asset_url johnkerl/miller "$tag" "$asset" "$body")
+    checksum_url=$(github_asset_url johnkerl/miller "$tag" "miller-${latest}-checksums.txt" "$body")
+    log_info "mlr: downloading ${asset_url}"
+    if ! download_file "$checksum_url" "$tmp/checksums.txt"; then
+        TB_DETAIL="download failed (checksums)"
+        return 1
+    fi
+    cktext=$(<"$tmp/checksums.txt")
+    expected=$(checksum_for "$cktext" "$asset") || { TB_DETAIL="checksum entry not found for ${asset}"; return 1; }
+    if ! download_file "$asset_url" "$tmp/$asset"; then
+        TB_DETAIL="download failed"
+        return 1
+    fi
+    if ! verify_sha256 "$tmp/$asset" "$expected"; then
+        TB_DETAIL="checksum mismatch"
+        return 1
+    fi
+    if ! extract_archive "$tmp/$asset" "$tmp/x"; then
+        TB_DETAIL="extraction failed"
+        return 1
+    fi
+    src=$(_find_in_archive "$tmp/x" mlr "${asset%.tar.gz}")
+    [ -n "$src" ] || { TB_DETAIL="binary not found in archive"; return 1; }
+    if ! atomic_install "$src" "$CLI_TOOLBOX_HOME/bin/mlr"; then
+        TB_DETAIL="failed to place binary"
+        return 1
+    fi
+    ver=$(get_installed_version mlr)
+    manifest_record mlr release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/mlr"
+    _finish_install mlr "$installed" "$ver"
+}
+
+_kubectl_platform() {
+    local os="$1" arch="$2" os_name="" arch_name=""
+    case "$os" in
+        linux) os_name=linux ;;
+        darwin) os_name=darwin ;;
+        *) return 1 ;;
+    esac
+    case "$arch" in
+        amd64) arch_name=amd64 ;;
+        arm64) arch_name=arm64 ;;
+        *) return 1 ;;
+    esac
+    printf '%s/%s' "$os_name" "$arch_name"
+}
+
+_helm_platform_suffix() {
+    local os="$1" arch="$2"
+    case "$os-$arch" in
+        linux-amd64) printf '%s' "linux-amd64" ;;
+        linux-arm64) printf '%s' "linux-arm64" ;;
+        darwin-amd64) printf '%s' "darwin-amd64" ;;
+        darwin-arm64) printf '%s' "darwin-arm64" ;;
+        *) return 1 ;;
+    esac
+}
+
+install_kubectl() {
+    TB_STATE=error
+    TB_DETAIL=""
+    _installer_start || return 1
+    local latest installed platform tag asset_url checksum_url tmp expected ver
+    latest=$(kubectl_latest_version) || { TB_DETAIL="cannot determine latest version"; return 1; }
+    installed=$(get_installed_version kubectl)
+    if [ -n "$installed" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        return 0
+    fi
+    platform=$(_kubectl_platform "$TB_OS" "$TB_ARCH") || { TB_DETAIL="unsupported platform"; return 1; }
+    tag="v${latest}"
+    asset_url="https://dl.k8s.io/release/${tag}/bin/${platform}/kubectl"
+    checksum_url="${asset_url}.sha256"
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    log_info "kubectl: downloading ${asset_url}"
+    if ! download_file "$checksum_url" "$tmp/kubectl.sha256"; then
+        TB_DETAIL="download failed (checksum)"
+        return 1
+    fi
+    expected=$(tr -d '[:space:]' <"$tmp/kubectl.sha256")
+    if ! download_file "$asset_url" "$tmp/kubectl"; then
+        TB_DETAIL="download failed"
+        return 1
+    fi
+    if ! verify_sha256 "$tmp/kubectl" "$expected"; then
+        TB_DETAIL="checksum mismatch"
+        return 1
+    fi
+    if ! atomic_install "$tmp/kubectl" "$CLI_TOOLBOX_HOME/bin/kubectl"; then
+        TB_DETAIL="failed to place binary"
+        return 1
+    fi
+    ver=$(get_installed_version kubectl)
+    manifest_record kubectl release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/kubectl"
+    _finish_install kubectl "$installed" "$ver"
+}
+
+install_helm() {
+    TB_STATE=error
+    TB_DETAIL=""
+    _installer_start || return 1
+    local latest installed suffix asset asset_url checksum_url tmp cktext expected src ver
+    latest=$(helm_latest_version) || { TB_DETAIL="cannot determine latest version"; return 1; }
+    installed=$(get_installed_version helm)
+    if [ -n "$installed" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        return 0
+    fi
+    suffix=$(_helm_platform_suffix "$TB_OS" "$TB_ARCH") || { TB_DETAIL="unsupported platform"; return 1; }
+    asset="helm-v${latest}-${suffix}.tar.gz"
+    asset_url="https://get.helm.sh/${asset}"
+    checksum_url="${asset_url}.sha256sum"
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    log_info "helm: downloading ${asset_url}"
+    if ! download_file "$checksum_url" "$tmp/checksums.sha256sum"; then
+        TB_DETAIL="download failed (checksums)"
+        return 1
+    fi
+    cktext=$(<"$tmp/checksums.sha256sum")
+    expected=$(checksum_for "$cktext" "$asset") || { TB_DETAIL="checksum entry not found for ${asset}"; return 1; }
+    if ! download_file "$asset_url" "$tmp/$asset"; then
+        TB_DETAIL="download failed"
+        return 1
+    fi
+    if ! verify_sha256 "$tmp/$asset" "$expected"; then
+        TB_DETAIL="checksum mismatch"
+        return 1
+    fi
+    if ! extract_archive "$tmp/$asset" "$tmp/x"; then
+        TB_DETAIL="extraction failed"
+        return 1
+    fi
+    src=$(_find_in_archive "$tmp/x" helm "${suffix}" "${asset%.tar.gz}")
+    [ -n "$src" ] || { TB_DETAIL="binary not found in archive"; return 1; }
+    if ! atomic_install "$src" "$CLI_TOOLBOX_HOME/bin/helm"; then
+        TB_DETAIL="failed to place binary"
+        return 1
+    fi
+    ver=$(get_installed_version helm)
+    manifest_record helm release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/helm"
+    _finish_install helm "$installed" "$ver"
+}
+
+install_oci() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider oci "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli oci brew
+        return $?
+    fi
+    TB_STATE=error
+    TB_DETAIL=""
+    local installed latest url tmp ver path
+    installed=$(get_installed_version oci)
+    latest=$(official_installer_latest_version oci 2>/dev/null) || latest=""
+    if [ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        path=$(resolve_path oci) || path=""
+        [ -n "$path" ] && manifest_record oci official-installer "$installed" "$path"
+        return 0
+    fi
+    url=$(official_installer_url oci)
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    log_info "oci: downloading installer ${url}"
+    if ! download_file "$url" "$tmp/install.sh"; then
+        TB_DETAIL="download failed (installer)"
+        return 1
+    fi
+    chmod +x "$tmp/install.sh"
+    mkdir -p "$CLI_TOOLBOX_HOME/bin" "$CLI_TOOLBOX_HOME/tools/oci-cli"
+    log_info "oci: running official installer (--install-dir ${CLI_TOOLBOX_HOME}/tools/oci-cli --exec-dir ${CLI_TOOLBOX_HOME}/bin)"
+    if ! sh "$tmp/install.sh" --accept-all-defaults --no-tty \
+        --install-dir "$CLI_TOOLBOX_HOME/tools/oci-cli" \
+        --exec-dir "$CLI_TOOLBOX_HOME/bin" >/dev/null 2>&1; then
+        TB_DETAIL="official installer failed"
+        return 1
+    fi
+    path="$CLI_TOOLBOX_HOME/bin/oci"
+    if [ ! -x "$path" ]; then
+        path=$(resolve_path oci) || path=""
+    fi
+    if [ -z "$path" ]; then
+        TB_DETAIL="installed but binary not found on PATH"
+        return 1
+    fi
+    ver=$(_parse_version oci "$path")
+    if [ -z "$ver" ]; then
+        TB_DETAIL="installed but version check failed"
+        return 1
+    fi
+    manifest_record oci official-installer "$ver" "$path"
+    _finish_install oci "$installed" "$ver"
+}
+
+# ---------------------------------------------------------------------------
+# AI agent / utility CLIs
+# ---------------------------------------------------------------------------
+
+_opencode_release_asset() {
+    local ver="$1" os="$2" arch="$3"
+    case "$os" in
+        linux)
+            case "$arch" in
+                amd64) printf 'opencode-linux-x64.tar.gz' ;;
+                arm64) printf 'opencode-linux-arm64.tar.gz' ;;
+            esac
+            ;;
+        darwin)
+            case "$arch" in
+                amd64) printf 'opencode-darwin-x64.zip' ;;
+                arm64) printf 'opencode-darwin-arm64.zip' ;;
+            esac
+            ;;
+    esac
+}
+
+_run_official_installer_script() {
+    local cli="$1" url="$2"
+    shift 2
+    TB_STATE=error
+    TB_DETAIL=""
+    _installer_start || return 1
+    local installed="" latest="" ver="" tmp="" path=""
+    installed=$(get_installed_version "$cli")
+    latest=$(official_installer_latest_version "$cli" 2>/dev/null) || latest=""
+    if [ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        path=$(resolve_path "$cli") || path=""
+        [ -n "$path" ] && manifest_record "$cli" official-installer "$installed" "$path"
+        return 0
+    fi
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    log_info "${cli}: downloading installer ${url}"
+    if ! download_file "$url" "$tmp/install.sh"; then
+        TB_DETAIL="download failed (installer)"
+        return 1
+    fi
+    chmod +x "$tmp/install.sh"
+    log_info "${cli}: running official installer"
+    if [ "$#" -gt 0 ]; then
+        if ! sh "$tmp/install.sh" "$@" >/dev/null 2>&1; then
+            TB_DETAIL="official installer failed"
+            return 1
+        fi
+    elif ! sh "$tmp/install.sh" >/dev/null 2>&1; then
+        TB_DETAIL="official installer failed"
+        return 1
+    fi
+    path=$(resolve_path "$cli") || path=""
+    if [ -z "$path" ]; then
+        TB_DETAIL="installed but binary not found on PATH"
+        return 1
+    fi
+    ver=$(_parse_version "$cli" "$path")
+    if [ -z "$ver" ]; then
+        TB_DETAIL="installed but version check failed"
+        return 1
+    fi
+    manifest_record "$cli" official-installer "$ver" "$path"
+    _finish_install "$cli" "$installed" "$ver"
+}
+
+install_opencode() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider opencode "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli opencode brew
+        return $?
+    fi
+    TB_STATE=error
+    TB_DETAIL=""
+    local body latest installed asset tag asset_url tmp src ver
+    body=$(github_release_json anomalyco/opencode) || { TB_DETAIL="cannot determine latest version"; return 1; }
+    latest=$(github_version_from_json "$body") || { TB_DETAIL="cannot determine latest version"; return 1; }
+    installed=$(get_installed_version opencode)
+    if [ -n "$installed" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        return 0
+    fi
+    asset=$(_opencode_release_asset "$latest" "$TB_OS" "$TB_ARCH")
+    [ -n "$asset" ] || { TB_DETAIL="unsupported platform"; return 1; }
+    tag="v${latest}"
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    asset_url=$(github_asset_url anomalyco/opencode "$tag" "$asset" "$body")
+    log_warn "opencode: no standalone checksum file published; skipping checksum verification"
+    log_info "opencode: downloading ${asset_url}"
+    if ! download_file "$asset_url" "$tmp/$asset"; then
+        TB_DETAIL="download failed"
+        return 1
+    fi
+    case "$asset" in
+        *.zip)
+            if ! extract_archive "$tmp/$asset" "$tmp/x"; then
+                TB_DETAIL="extraction failed"
+                return 1
+            fi
+            ;;
+        *)
+            if ! extract_archive "$tmp/$asset" "$tmp/x"; then
+                TB_DETAIL="extraction failed"
+                return 1
+            fi
+            ;;
+    esac
+    src=$(_find_in_archive "$tmp/x" opencode "${asset%.tar.gz}" "${asset%.zip}")
+    [ -n "$src" ] || { TB_DETAIL="binary not found in archive"; return 1; }
+    if ! atomic_install "$src" "$CLI_TOOLBOX_HOME/bin/opencode"; then
+        TB_DETAIL="failed to place binary"
+        return 1
+    fi
+    ver=$(get_installed_version opencode)
+    manifest_record opencode release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/opencode"
+    _finish_install opencode "$installed" "$ver"
+}
+
+install_agent() {
+    local url=""
+    url=$(official_installer_url agent)
+    log_warn "agent: official installer does not publish checksums; skipping checksum verification"
+    _run_official_installer_script agent "$url"
+}
+
+install_claude() {
+    local url=""
+    url=$(official_installer_url claude)
+    _run_official_installer_script claude "$url" stable
+}
+
+install_codex() {
+    local cli="codex" url="" installed="" latest="" ver="" tmp="" path=""
+    url=$(official_installer_url codex)
+    TB_STATE=error
+    TB_DETAIL=""
+    _installer_start || return 1
+    installed=$(get_installed_version codex)
+    latest=$(official_installer_latest_version codex 2>/dev/null) || latest=""
+    if [ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        path=$(resolve_path codex) || path=""
+        [ -n "$path" ] && manifest_record codex official-installer "$installed" "$path"
+        return 0
+    fi
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    log_info "codex: downloading installer ${url}"
+    if ! download_file "$url" "$tmp/install.sh"; then
+        TB_DETAIL="download failed (installer)"
+        return 1
+    fi
+    chmod +x "$tmp/install.sh"
+    log_info "codex: running official installer"
+    if ! env CODEX_INSTALL_DIR="$CLI_TOOLBOX_HOME/bin" CODEX_NON_INTERACTIVE=true \
+        sh "$tmp/install.sh" >/dev/null 2>&1; then
+        TB_DETAIL="official installer failed"
+        return 1
+    fi
+    path=$(resolve_path codex) || path=""
+    if [ -z "$path" ]; then
+        TB_DETAIL="installed but binary not found on PATH"
+        return 1
+    fi
+    ver=$(_parse_version codex "$path")
+    if [ -z "$ver" ]; then
+        TB_DETAIL="installed but version check failed"
+        return 1
+    fi
+    manifest_record codex official-installer "$ver" "$path"
+    _finish_install codex "$installed" "$ver"
+}
+
+install_agy() {
+    local url=""
+    url=$(official_installer_url agy)
+    _run_official_installer_script agy "$url" --dir "$CLI_TOOLBOX_HOME/bin"
+}
+
+install_codebuddy() {
+    local provider="" url=""
+    _installer_start || return 1
+    provider=$(resolve_provider codebuddy "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli codebuddy brew
+        return $?
+    fi
+    if [ "$provider" = "unknown" ]; then
+        TB_STATE=error
+        TB_DETAIL="unsupported platform for codebuddy"
+        return 1
+    fi
+    url=$(official_installer_url codebuddy)
+    _run_official_installer_script codebuddy "$url"
+}
+
+_delete_manifest_binary() {
+    local cli="$1" info="" path=""
+    TB_STATE=error
+    TB_DETAIL=""
+    if ! manifest_lookup "$cli" >/dev/null 2>&1; then
+        TB_STATE=skipped-not-managed
+        TB_DETAIL="not managed by cli-toolbox"
+        return 0
+    fi
+    info=$(manifest_lookup "$cli")
+    path=${info#*$'\t'}
+    path=${path#*$'\t'}
+    if [ -e "$path" ] || [ -L "$path" ]; then
+        rm -f "$path"
+    fi
+    _remove_bin_link "$cli"
+    manifest_remove "$cli"
+    TB_STATE=deleted
+    TB_DETAIL="removed managed binary"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -710,6 +1285,31 @@ _delete_gcloud() {
     return 0
 }
 
+_delete_oci() {
+    local provider=""
+    TB_STATE=error
+    TB_DETAIL=""
+    if ! cli_is_toolbox_managed oci; then
+        TB_STATE=skipped-not-managed
+        TB_DETAIL="not managed by cli-toolbox"
+        return 0
+    fi
+    provider=$(manifest_lookup oci 2>/dev/null | awk -F '\t' '{print $2}')
+    if [ -z "$provider" ]; then
+        provider=$(resolve_provider oci "${TB_OS:-linux}")
+    fi
+    if [ "$provider" = "brew" ]; then
+        _delete_package_cli oci
+        return $?
+    fi
+    rm -f "$CLI_TOOLBOX_HOME/bin/oci"
+    rm -rf "$CLI_TOOLBOX_HOME/tools/oci-cli"
+    manifest_remove oci
+    TB_STATE=deleted
+    TB_DETAIL="removed oci-cli"
+    return 0
+}
+
 _delete_aws() {
     TB_STATE=error
     TB_DETAIL=""
@@ -794,17 +1394,27 @@ run_uninstaller() {
     case "$name" in
         uv) _delete_uv ;;
         tccli) _delete_tccli ;;
-        gh | az) _delete_package_cli "$name" ;;
+        gh | az | terraform) _delete_package_cli "$name" ;;
         gcloud) _delete_gcloud ;;
-        glow)
-            provider=$(resolve_provider glow "${TB_OS:-linux}")
+        glow | rg | mlr | opencode)
+            provider=$(resolve_provider "$name" "${TB_OS:-linux}")
             if [ "$provider" = "brew" ]; then
-                _delete_package_cli glow
+                _delete_package_cli "$name"
             else
-                _delete_release_binary glow
+                _delete_release_binary "$name"
             fi
             ;;
-        coscli) _delete_release_binary coscli ;;
+        coscli | kubectl | helm) _delete_release_binary "$name" ;;
+        oci) _delete_oci ;;
+        agent | claude | codex | agy) _delete_manifest_binary "$name" ;;
+        codebuddy)
+            provider=$(resolve_provider codebuddy "${TB_OS:-linux}")
+            if [ "$provider" = "brew" ]; then
+                _delete_package_cli codebuddy
+            else
+                _delete_manifest_binary codebuddy
+            fi
+            ;;
         aws)
             provider=$(resolve_provider aws "${TB_OS:-linux}")
             if [ "$provider" = "brew" ]; then
@@ -834,8 +1444,20 @@ run_installer() {
         gh) install_gh ;;
         gcloud) install_gcloud ;;
         az) install_az ;;
+        terraform) install_terraform ;;
         glow) install_glow ;;
         coscli) install_coscli ;;
+        rg) install_rg ;;
+        mlr) install_mlr ;;
+        kubectl) install_kubectl ;;
+        helm) install_helm ;;
+        oci) install_oci ;;
+        opencode) install_opencode ;;
+        agent) install_agent ;;
+        codebuddy) install_codebuddy ;;
+        claude) install_claude ;;
+        codex) install_codex ;;
+        agy) install_agy ;;
         aws) install_aws ;;
         awst) install_awst ;;
         gcloudt) install_gcloudt ;;

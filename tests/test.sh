@@ -22,12 +22,15 @@ test_cleanup() {
 trap test_cleanup EXIT INT TERM
 
 source_libs() {
+    export TB_ROOT="${TB_ROOT:-$TBROOT}"
     # shellcheck source=lib/common.sh
     . "$TBROOT/lib/common.sh"
     # shellcheck source=lib/packages.sh
     . "$TBROOT/lib/packages.sh"
     # shellcheck source=lib/providers.sh
     . "$TBROOT/lib/providers.sh"
+    # shellcheck source=lib/targets.sh
+    . "$TBROOT/lib/targets.sh"
     # shellcheck source=lib/installers.sh
     . "$TBROOT/lib/installers.sh"
 }
@@ -56,6 +59,7 @@ assert_true() { local desc="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$des
 make_bin() {
     local path="$1"
     shift
+    mkdir -p "$(dirname "$path")"
     printf '#!/bin/sh\n%s\n' "$*" >"$path"
     chmod +x "$path"
 }
@@ -85,6 +89,92 @@ make_glow_fixture() {
  {"name": "glow_${ver}_Linux_x86_64.tar.gz", "browser_download_url": "file://$base/assets/glow_${ver}_Linux_x86_64.tar.gz"},
  {"name": "checksums.txt", "browser_download_url": "file://$base/assets/checksums.txt"}]}
 EOF
+}
+
+make_rg_fixture() {
+    local base="$1" ver="$2" root asset dir
+    asset="ripgrep-${ver}-x86_64-unknown-linux-musl.tar.gz"
+    dir="ripgrep-${ver}-x86_64-unknown-linux-musl"
+    root="$base/assets/root"
+    mkdir -p "$root/$dir"
+    make_bin "$root/$dir/rg" "echo \"ripgrep ${ver} (abc)\""
+    make_tarball "$root" "$base/assets/$asset" "$dir"
+    local hash
+    hash=$(sha256sum "$base/assets/$asset" | awk '{print $1}')
+    printf '%s  %s\n' "$hash" "$asset" >"$base/assets/${asset}.sha256"
+    mkdir -p "$base/api/repos/BurntSushi/ripgrep/releases"
+    cat >"$base/api/repos/BurntSushi/ripgrep/releases/latest" <<EOF
+{"tag_name": "${ver}", "name": "${ver}", "assets": [
+ {"name": "$asset", "browser_download_url": "file://$base/assets/$asset"},
+ {"name": "${asset}.sha256", "browser_download_url": "file://$base/assets/${asset}.sha256"}]}
+EOF
+}
+
+make_mlr_fixture() {
+    local base="$1" ver="$2" root asset dir
+    asset="miller-${ver}-linux-amd64.tar.gz"
+    dir="miller-${ver}-linux-amd64"
+    root="$base/assets/root"
+    mkdir -p "$root/$dir"
+    make_bin "$root/$dir/mlr" "echo \"mlr ${ver}\""
+    make_tarball "$root" "$base/assets/$asset" "$dir"
+    local hash
+    hash=$(sha256sum "$base/assets/$asset" | awk '{print $1}')
+    printf '%s  %s\n' "$hash" "$asset" >"$base/assets/miller-${ver}-checksums.txt"
+    mkdir -p "$base/api/repos/johnkerl/miller/releases"
+    cat >"$base/api/repos/johnkerl/miller/releases/latest" <<EOF
+{"tag_name": "v${ver}", "name": "v${ver}", "assets": [
+ {"name": "$asset", "browser_download_url": "file://$base/assets/$asset"},
+ {"name": "miller-${ver}-checksums.txt", "browser_download_url": "file://$base/assets/miller-${ver}-checksums.txt"}]}
+EOF
+}
+
+make_kubectl_fixture() {
+    local base="$1" ver="$2"
+    mkdir -p "$base/release/v${ver}/bin/linux/amd64"
+    make_bin "$base/release/v${ver}/bin/linux/amd64/kubectl" "echo \"Client Version: v${ver}\""
+    printf 'v%s\n' "$ver" >"$base/release/stable.txt"
+    local hash
+    hash=$(sha256sum "$base/release/v${ver}/bin/linux/amd64/kubectl" | awk '{print $1}')
+    printf '%s\n' "$hash" >"$base/release/v${ver}/bin/linux/amd64/kubectl.sha256"
+}
+
+make_helm_fixture() {
+    local base="$1" ver="$2" root asset dir
+    asset="helm-v${ver}-linux-amd64.tar.gz"
+    dir="linux-amd64"
+    root="$base/assets/root"
+    mkdir -p "$root/$dir"
+    make_bin "$root/$dir/helm" "echo \"version.BuildInfo{Version:\\\"v${ver}\\\",}\""
+    make_tarball "$root" "$base/assets/$asset" "$dir"
+    local hash
+    hash=$(sha256sum "$base/assets/$asset" | awk '{print $1}')
+    printf '%s  %s\n' "$hash" "$asset" >"$base/assets/${asset}.sha256sum"
+    printf 'v%s\n' "$ver" >"$base/helm-latest-version"
+}
+
+make_oci_installer_fixture() {
+    local base="$1" ver="$2"
+    mkdir -p "$base"
+    cat >"$base/install.sh" <<EOF
+#!/bin/sh
+install_dir=""
+exec_dir=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    --install-dir) install_dir="\$2"; shift 2 ;;
+    --exec-dir) exec_dir="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+mkdir -p "\$install_dir" "\$exec_dir"
+cat > "\$exec_dir/oci" <<'BIN'
+#!/bin/sh
+echo "${ver}"
+BIN
+chmod +x "\$exec_dir/oci"
+EOF
+    chmod +x "$base/install.sh"
 }
 
 make_coscli_fixture() {
@@ -211,6 +301,101 @@ PY
     printf '%s\n' "$ver" >"$base/version.txt"
 }
 
+make_opencode_fixture() {
+    local base="$1" ver="$2" root asset dir
+    asset="opencode-linux-x64.tar.gz"
+    dir="opencode-linux-x64"
+    root="$base/assets/root"
+    mkdir -p "$root/$dir"
+    make_bin "$root/$dir/opencode" "echo \"opencode version ${ver}\""
+    make_tarball "$root" "$base/assets/$asset" "$dir"
+    mkdir -p "$base/api/repos/anomalyco/opencode/releases"
+    cat >"$base/api/repos/anomalyco/opencode/releases/latest" <<EOF
+{"tag_name": "v${ver}", "name": "v${ver}", "assets": [
+ {"name": "$asset", "browser_download_url": "file://$base/assets/$asset"}]}
+EOF
+}
+
+make_agent_installer_fixture() {
+    local base="$1" ver="$2"
+    mkdir -p "$base"
+    cat >"$base/install.sh" <<EOF
+#!/bin/sh
+mkdir -p "\$HOME/.local/bin"
+cat > "\$HOME/.local/bin/agent" <<'BIN'
+#!/bin/sh
+echo "agent version ${ver}"
+BIN
+chmod +x "\$HOME/.local/bin/agent"
+EOF
+    chmod +x "$base/install.sh"
+}
+
+make_codex_installer_fixture() {
+    local base="$1" ver="$2"
+    mkdir -p "$base"
+    cat >"$base/install.sh" <<EOF
+#!/bin/sh
+bindir="\${CODEX_INSTALL_DIR:-\$HOME/.local/bin}"
+mkdir -p "\$bindir"
+cat > "\$bindir/codex" <<'BIN'
+#!/bin/sh
+echo "codex version ${ver}"
+BIN
+chmod +x "\$bindir/codex"
+EOF
+    chmod +x "$base/install.sh"
+}
+
+make_agy_installer_fixture() {
+    local base="$1" ver="$2"
+    mkdir -p "$base"
+    cat >"$base/install.sh" <<EOF
+#!/bin/sh
+dir=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    --dir) dir="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+mkdir -p "\$dir"
+cat > "\$dir/agy" <<'BIN'
+#!/bin/sh
+echo "${ver}"
+BIN
+chmod +x "\$dir/agy"
+EOF
+    chmod +x "$base/install.sh"
+}
+
+write_targets_file() {
+    local path="$1"
+    shift
+    : >"$path"
+    while [ "$#" -gt 0 ]; do
+        printf '%s\n' "$1" >>"$path"
+        shift
+    done
+}
+
+# make_cli_sandbox [line...]: temp dir with cli-toolbox.sh, lib/, and custom targets.txt.
+make_cli_sandbox() {
+    local dir
+    dir=$(test_tmp)
+    ln -s "$TBROOT/cli-toolbox.sh" "$dir/cli-toolbox.sh"
+    ln -s "$TBROOT/lib" "$dir/lib"
+    write_targets_file "$dir/targets.txt" "$@"
+    printf '%s' "$dir"
+}
+
+cli_sandbox() {
+    local sandbox="$1" out="$2"
+    shift 2
+    "$sandbox/cli-toolbox.sh" "$@" >"$out" 2>&1
+    CLI_RC=$?
+}
+
 make_cloud_cli_fixture() {
     local base="$1"
     mkdir -p "$base/aws-cli/bin" "$base/g-cli/bin" "$base/tc-cli/bin"
@@ -221,17 +406,28 @@ make_cloud_cli_fixture() {
 
 FIX_GLOW=$(test_tmp); make_glow_fixture "$FIX_GLOW" 3.0.0
 FIX_COSCLI=$(test_tmp); make_coscli_fixture "$FIX_COSCLI" 1.0.9
+FIX_RG=$(test_tmp); make_rg_fixture "$FIX_RG" 15.0.0
+FIX_MLR=$(test_tmp); make_mlr_fixture "$FIX_MLR" 6.20.0
 FIX_GCLOUD=$(test_tmp); make_gcloud_fixture "$FIX_GCLOUD" 502.0.0
 FIX_UV_REL=$(test_tmp); make_uv_release_fixture "$FIX_UV_REL" 0.12.12
 FIX_UV_INST=$(test_tmp); make_uv_installer_fixture "$FIX_UV_INST" 0.12.12
 FIX_PYPI=$(test_tmp); make_pypi_fixture "$FIX_PYPI" tccli 3.1.165.1
 FIX_AWS=$(test_tmp); make_aws_fixture "$FIX_AWS" 2.36.42
 FIX_CLOUD=$(test_tmp); make_cloud_cli_fixture "$FIX_CLOUD"
+FIX_OPENCODE=$(test_tmp); make_opencode_fixture "$FIX_OPENCODE" 1.0.0
+FIX_AGENT=$(test_tmp); make_agent_installer_fixture "$FIX_AGENT" 1.0.0
+FIX_CODEX=$(test_tmp); make_codex_installer_fixture "$FIX_CODEX" 2.0.0
+FIX_AGY=$(test_tmp); make_agy_installer_fixture "$FIX_AGY" 1.2.1
+FIX_KUBECTL=$(test_tmp); make_kubectl_fixture "$FIX_KUBECTL" 1.30.0
+FIX_HELM=$(test_tmp); make_helm_fixture "$FIX_HELM" 3.14.0
+FIX_OCI=$(test_tmp); make_oci_installer_fixture "$FIX_OCI" 3.50.0
 
 new_home() { test_tmp; }
 
 setup_clean_env() {
     local H="$1"
+    export TB_ROOT="$TBROOT"
+    export HOME="$H"
     export CLI_TOOLBOX_HOME="$H"
     export CLI_TOOLBOX_API_BASE="file://$FIX_UV_REL/api"
     export CLI_TOOLBOX_PYPI_BASE="file://$FIX_PYPI/pypi"
@@ -242,6 +438,53 @@ setup_clean_env() {
     export PATH="$H/bin:$H/.local/bin:$PATH"
     unset GITHUB_TOKEN CLI_TOOLBOX_CURL
 }
+
+# ---------------------------------------------------------------------------
+# targets.txt parsing
+# ---------------------------------------------------------------------------
+
+TARGETS_OK=$(
+    TROOT=$(test_tmp)
+    write_targets_file "$TROOT/targets.txt" \
+        "# header" \
+        "" \
+        "uv" \
+        "gh   # cloud cli" \
+        "uv" \
+        "tccli"
+    export TB_ROOT="$TROOT"
+    source_libs
+    load_targets && printf '%s\n' "${TB_TARGETS[*]}"
+)
+assert_contains "targets ignores comments and blanks" "$TARGETS_OK" "uv gh tccli"
+assert_not_contains "targets deduplicates" "$TARGETS_OK" "uv uv"
+
+TARGETS_BAD=$(
+    TROOT=$(test_tmp)
+    write_targets_file "$TROOT/targets.txt" "not-a-cli"
+    export TB_ROOT="$TROOT"
+    source_libs
+    load_targets 2>&1
+    printf 'rc=%s\n' "$?"
+)
+assert_contains "targets unknown CLI errors" "$TARGETS_BAD" "unknown CLI in targets.txt"
+assert_contains "targets unknown CLI rc" "$TARGETS_BAD" "rc=2"
+
+TARGETS_EMPTY=$(
+    TROOT=$(test_tmp)
+    write_targets_file "$TROOT/targets.txt" "# only comment" ""
+    export TB_ROOT="$TROOT"
+    source_libs
+    load_targets 2>&1
+    printf 'rc=%s\n' "$?"
+)
+assert_contains "targets empty file errors" "$TARGETS_EMPTY" "no valid CLI entries"
+
+DISPLAY=$(
+    source_libs
+    cli_display_name agent
+)
+assert_contains "agent display name" "$DISPLAY" "Cursor Agent CLI"
 
 # ---------------------------------------------------------------------------
 # unit: version_gt / resolve_real_path / resolve_provider
@@ -270,10 +513,91 @@ PROV_OUT=$(
     resolve_provider gcloud linux; echo
     resolve_provider gh darwin; echo
     resolve_provider aws darwin; echo
+    resolve_provider terraform linux; echo
+    resolve_provider terraform darwin; echo
+    resolve_provider kubectl linux; echo
+    resolve_provider helm darwin; echo
+    resolve_provider oci linux
 )
 assert_contains "resolve_provider gcloud archive" "$PROV_OUT" "official-archive"
 assert_contains "resolve_provider gh darwin brew" "$PROV_OUT" "brew"
 assert_contains "resolve_provider aws darwin brew" "$PROV_OUT" "brew"
+assert_contains "resolve_provider terraform linux apt" "$PROV_OUT" "apt"
+assert_contains "resolve_provider terraform darwin brew" "$PROV_OUT" "brew"
+assert_contains "resolve_provider kubectl release-binary" "$PROV_OUT" "release-binary"
+assert_contains "resolve_provider helm release-binary" "$PROV_OUT" "release-binary"
+assert_contains "resolve_provider oci linux official-installer" "$PROV_OUT" "official-installer"
+
+OCI_DARWIN_PROV=$(
+    source_libs
+    has_brew() { return 0; }
+    resolve_provider oci darwin
+)
+assert_contains "resolve_provider oci darwin brew" "$OCI_DARWIN_PROV" "brew"
+
+TF_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/terraform" 'echo "Terraform v1.9.8"'
+    source_libs
+    _parse_version terraform "$H/bin/terraform"
+)
+assert_contains "terraform version parse" "$TF_VER" "1.9.8"
+
+RG_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/rg" 'echo "ripgrep 15.0.0 (abc)"'
+    source_libs
+    _parse_version rg "$H/bin/rg"
+)
+assert_contains "rg version parse" "$RG_VER" "15.0.0"
+
+MLR_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/mlr" 'echo "mlr 6.20.0"'
+    source_libs
+    _parse_version mlr "$H/bin/mlr"
+)
+assert_contains "mlr version parse" "$MLR_VER" "6.20.0"
+
+AGENT_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/agent" 'echo "agent version 1.0.0"'
+    source_libs
+    _parse_version agent "$H/bin/agent"
+)
+assert_contains "agent version parse (prefixed)" "$AGENT_VER" "1.0.0"
+
+AGENT_CAL_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/agent" 'echo "2026.09.10-fd3934a"'
+    source_libs
+    _parse_version agent "$H/bin/agent"
+)
+assert_contains "agent version parse (bare calendar)" "$AGENT_CAL_VER" "2026.09.10-fd3934a"
+
+KUBECTL_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/kubectl" 'echo "Client Version: v1.30.0"'
+    source_libs
+    _parse_version kubectl "$H/bin/kubectl"
+)
+assert_contains "kubectl version parse" "$KUBECTL_VER" "1.30.0"
+
+HELM_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/helm" 'echo "version.BuildInfo{Version:\"v3.14.0\",}"'
+    source_libs
+    _parse_version helm "$H/bin/helm"
+)
+assert_contains "helm version parse" "$HELM_VER" "3.14.0"
+
+OCI_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/oci" 'echo "3.50.0"'
+    source_libs
+    _parse_version oci "$H/bin/oci"
+)
+assert_contains "oci version parse" "$OCI_VER" "3.50.0"
 
 GCURL_OUT=$(
     source_libs
@@ -488,6 +812,88 @@ export CLI_TOOLBOX_API_BASE="file://$FIX_COSCLI/api"
 cli "$OUT" install coscli
 assert_contains_re "coscli install" "$(cat "$OUT")" 'coscli[[:space:]]+installed'
 
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+export CLI_TOOLBOX_API_BASE="file://$FIX_RG/api"
+cli "$OUT" install rg
+assert_contains_re "rg install" "$(cat "$OUT")" 'rg[[:space:]]+installed'
+assert_true "rg binary exists" test -x "$H/bin/rg"
+
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+export CLI_TOOLBOX_API_BASE="file://$FIX_MLR/api"
+cli "$OUT" install mlr
+assert_contains_re "mlr install" "$(cat "$OUT")" 'mlr[[:space:]]+installed'
+assert_true "mlr binary exists" test -x "$H/bin/mlr"
+
+# ---------------------------------------------------------------------------
+# kubectl / helm release-binary
+# ---------------------------------------------------------------------------
+
+KUBECTL_OUT=$(
+    H=$(new_home)
+    export CLI_TOOLBOX_HOME="$H"
+    export TB_OS=linux TB_ARCH=amd64
+    source_libs
+    http_get() {
+        case "$1" in
+            *stable.txt) cat "$FIX_KUBECTL/release/stable.txt" ;;
+            *) return 1 ;;
+        esac
+    }
+    download_file() {
+        case "$2" in
+            *kubectl.sha256) cp "$FIX_KUBECTL/release/v1.30.0/bin/linux/amd64/kubectl.sha256" "$2" ;;
+            */kubectl) cp "$FIX_KUBECTL/release/v1.30.0/bin/linux/amd64/kubectl" "$2" ;;
+            *) return 1 ;;
+        esac
+    }
+    install_kubectl
+    printf 'state=%s ver=%s\n' "$TB_STATE" "$(get_installed_version kubectl)"
+)
+assert_contains "kubectl installs" "$KUBECTL_OUT" "state=installed"
+assert_contains "kubectl version" "$KUBECTL_OUT" "ver=1.30.0"
+
+HELM_OUT=$(
+    H=$(new_home)
+    export CLI_TOOLBOX_HOME="$H"
+    export TB_OS=linux TB_ARCH=amd64
+    source_libs
+    http_get() {
+        case "$1" in
+            *helm-latest-version) cat "$FIX_HELM/helm-latest-version" ;;
+            *) return 1 ;;
+        esac
+    }
+    download_file() {
+        case "$1" in
+            *helm-v3.14.0-linux-amd64.tar.gz.sha256sum) cp "$FIX_HELM/assets/helm-v3.14.0-linux-amd64.tar.gz.sha256sum" "$2" ;;
+            *helm-v3.14.0-linux-amd64.tar.gz) cp "$FIX_HELM/assets/helm-v3.14.0-linux-amd64.tar.gz" "$2" ;;
+            *) return 1 ;;
+        esac
+    }
+    install_helm
+    printf 'state=%s ver=%s\n' "$TB_STATE" "$(get_installed_version helm)"
+)
+assert_contains "helm installs" "$HELM_OUT" "state=installed"
+assert_contains "helm version" "$HELM_OUT" "ver=3.14.0"
+
+OCI_OUT=$(
+    H=$(new_home)
+    export CLI_TOOLBOX_HOME="$H"
+    export TB_OS=linux TB_ARCH=amd64
+    export CLI_TOOLBOX_OCI_INSTALL_URL="file://$FIX_OCI/install.sh"
+    source_libs
+    official_installer_latest_version() { printf '%s\n' "3.50.0"; }
+    install_oci
+    printf 'state=%s ver=%s bin=%s\n' "$TB_STATE" "$(get_installed_version oci)" "$([ -x "$H/bin/oci" ] && echo yes || echo no)"
+)
+assert_contains "oci installs" "$OCI_OUT" "state=installed"
+assert_contains "oci version" "$OCI_OUT" "ver=3.50.0"
+assert_contains "oci binary exists" "$OCI_OUT" "bin=yes"
+
 # ---------------------------------------------------------------------------
 # aws official installer
 # ---------------------------------------------------------------------------
@@ -575,8 +981,98 @@ OUT=$(test_file)
 H=$(new_home)
 setup_clean_env "$H"
 cli "$OUT" help
-assert_contains "help shows standard set" "$(cat "$OUT")" "tccli"
+assert_contains "help shows targets.txt" "$(cat "$OUT")" "targets.txt"
+assert_contains "help shows agent label" "$(cat "$OUT")" "agent (Cursor Agent CLI)"
 assert_contains "help shows delete" "$(cat "$OUT")" "delete"
+assert_not_contains "help omits Environment section" "$(cat "$OUT")" "Environment:"
+assert_not_contains "help omits CLI_TOOLBOX_HOME" "$(cat "$OUT")" "CLI_TOOLBOX_HOME"
+
+# ---------------------------------------------------------------------------
+# targets-driven install/list
+# ---------------------------------------------------------------------------
+
+TROOT=$(make_cli_sandbox "uv")
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+cli_sandbox "$TROOT" "$OUT" install
+assert_contains_re "install without args uses targets" "$(cat "$OUT")" 'uv[[:space:]]+installed'
+assert_not_contains "install without args skips non-target" "$(cat "$OUT")" "gh"
+
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+cli "$OUT" install aws
+assert_contains_re "install with args only aws" "$(cat "$OUT")" 'aws[[:space:]]+installed'
+assert_not_contains "install with args skips others" "$(cat "$OUT")" "uv"
+
+TROOT=$(make_cli_sandbox "uv")
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+export CLI_TOOLBOX_API_BASE="file://$FIX_GLOW/api"
+cli_sandbox "$TROOT" "$OUT" install glow
+assert_true "glow present before targets install" test -x "$H/bin/glow"
+OUT=$(test_file)
+cli_sandbox "$TROOT" "$OUT" install
+assert_true "commented-out target not auto-deleted" test -x "$H/bin/glow"
+
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+cli_sandbox "$TROOT" "$OUT" list
+assert_contains "list without args uses targets" "$(cat "$OUT")" "uv"
+assert_not_contains "list without args omits non-target" "$(cat "$OUT")" "glow"
+
+# ---------------------------------------------------------------------------
+# AI agent installs (mocked official installers)
+# ---------------------------------------------------------------------------
+
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+export CLI_TOOLBOX_API_BASE="file://$FIX_OPENCODE/api"
+export CLI_TOOLBOX_AGENT_INSTALL_URL="file://$FIX_AGENT/install.sh"
+cli "$OUT" install opencode agent
+assert_contains_re "opencode install" "$(cat "$OUT")" 'opencode[[:space:]]+installed'
+assert_contains_re "agent install" "$(cat "$OUT")" 'agent \(Cursor Agent CLI\)[[:space:]]+installed'
+assert_true "agent binary exists" test -x "$H/.local/bin/agent"
+
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+export CLI_TOOLBOX_CODEX_INSTALL_URL="file://$FIX_CODEX/install.sh"
+export CLI_TOOLBOX_AGY_INSTALL_URL="file://$FIX_AGY/install.sh"
+cli "$OUT" install codex agy
+assert_contains_re "codex install" "$(cat "$OUT")" 'codex[[:space:]]+installed'
+assert_contains_re "agy install" "$(cat "$OUT")" 'agy[[:space:]]+installed'
+assert_true "codex binary exists" test -x "$H/bin/codex"
+assert_true "agy binary exists" test -x "$H/bin/agy"
+
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+export CLI_TOOLBOX_AGENT_INSTALL_URL="file://$FIX_AGENT/install.sh"
+cli "$OUT" install agent
+OUT=$(test_file)
+cli "$OUT" delete agent
+assert_contains_re "delete managed agent" "$(cat "$OUT")" 'agent \(Cursor Agent CLI\)[[:space:]]+deleted'
+assert_true "agent removed after delete" test ! -e "$H/.local/bin/agent"
+
+FAIL_KEEP=$(
+    H=$(new_home)
+    export CLI_TOOLBOX_HOME="$H"
+    export TB_OS=linux TB_ARCH=amd64
+    export CLI_TOOLBOX_API_BASE="file://$FIX_GLOW/api"
+    source_libs
+    make_bin "$H/bin/glow" 'echo "glow version 9.9.9"'
+    manifest_record glow release-binary 9.9.9 "$H/bin/glow"
+    github_release_json() { return 1; }
+    install_glow
+    printf 'state=%s ver=%s\n' "$TB_STATE" "$("$H/bin/glow" --version)"
+)
+assert_contains "update failure keeps glow" "$FAIL_KEEP" "state=error"
+assert_contains "glow version preserved" "$FAIL_KEEP" "9.9.9"
 
 # ---------------------------------------------------------------------------
 # delete

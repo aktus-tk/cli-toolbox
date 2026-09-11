@@ -1,0 +1,19 @@
+# Core cloud/ops CLIs
+uv
+gh
+tccli
+aws
+gcloud
+az
+terraform
+kubectl
+helm
+# oci
+
+# AI agents
+opencode
+agent       # Cursor Agent CLI
+codebuddy
+claude
+codex
+agy

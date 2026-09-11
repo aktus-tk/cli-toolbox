@@ -7,10 +7,8 @@ if [ -z "${CLOUD_CLI_REPO:-}" ]; then
 fi
 export CLOUD_CLI_REPO
 
-# shellcheck disable=SC2034
-STANDARD_SET=(uv gh glow coscli tccli aws gcloud az)
-
-SUPPORTED_CLIS=(uv gh glow coscli tccli aws gcloud az awst gcloudt tcclit)
+SUPPORTED_CLIS=(uv gh glow coscli rg mlr tccli aws gcloud az terraform \
+    kubectl helm oci opencode agent codebuddy claude codex agy awst gcloudt tcclit)
 UNSUPPORTED_CLIS=()
 
 is_supported() {
@@ -29,6 +27,14 @@ unsupported_reason() {
     printf '%s' "unknown CLI"
 }
 
+# cli_display_name: user-facing label (help/doctor); defaults to the CLI name.
+cli_display_name() {
+    case "$1" in
+        agent) printf '%s' "agent (Cursor Agent CLI)" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # resolve_provider <cli> <os>: preferred provider for CLI on the given OS.
 resolve_provider() {
     local cli="$1" os="$2"
@@ -44,13 +50,13 @@ resolve_provider() {
                 *) printf '%s' "official-installer" ;;
             esac
             ;;
-        gh | az)
+        gh | az | terraform)
             case "$os" in
                 darwin) printf '%s' "brew" ;;
                 *) printf '%s' "apt" ;;
             esac
             ;;
-        glow)
+        glow | rg | mlr | opencode)
             case "$os" in
                 darwin)
                     if has_brew; then
@@ -60,6 +66,39 @@ resolve_provider() {
                     fi
                     ;;
                 *) printf '%s' "release-binary" ;;
+            esac
+            ;;
+        kubectl | helm)
+            printf '%s' "release-binary"
+            ;;
+        oci)
+            case "$os" in
+                darwin)
+                    if has_brew; then
+                        printf '%s' "brew"
+                    else
+                        printf '%s' "official-installer"
+                    fi
+                    ;;
+                linux)
+                    printf '%s' "official-installer"
+                    ;;
+                *) printf '%s' "unknown" ;;
+            esac
+            ;;
+        agent | claude | codex | agy)
+            printf '%s' "official-installer"
+            ;;
+        codebuddy)
+            case "$os" in
+                darwin | linux)
+                    if has_brew; then
+                        printf '%s' "brew"
+                    else
+                        printf '%s' "official-installer"
+                    fi
+                    ;;
+                *) printf '%s' "unknown" ;;
             esac
             ;;
         *) printf '%s' "unknown" ;;
@@ -600,9 +639,12 @@ list_latest_version() {
     local name="$1" body ver="" pkg="" provider=""
     provider=$(cli_preferred_provider "$name")
     case "$name" in
-        glow | coscli)
+        glow | coscli | rg | mlr | opencode)
             body=$(github_release_json "$(list_repo "$name")" 2>/dev/null) || body=""
             [ -n "$body" ] && ver=$(github_version_from_json "$body" 2>/dev/null)
+            ;;
+        agent | claude | codex | agy | codebuddy)
+            ver=$(official_installer_latest_version "$name" 2>/dev/null) || ver=""
             ;;
         uv)
             body=$(github_release_json astral-sh/uv 2>/dev/null) || body=""
@@ -622,11 +664,25 @@ list_latest_version() {
         gcloud)
             ver=$(gcloud_latest_version 2>/dev/null)
             ;;
-        gh | az)
+        gh | az | terraform)
             pkg=$(cli_package_name "$name" "$provider")
             if package_manager_available "$provider"; then
                 ver=$(package_latest_version "$provider" "$pkg")
             fi
+            ;;
+        oci)
+            if [ "$provider" = "brew" ]; then
+                pkg=$(cli_package_name oci brew)
+                ver=$(package_latest_version brew "$pkg" 2>/dev/null)
+            else
+                ver=$(official_installer_latest_version oci 2>/dev/null) || ver=""
+            fi
+            ;;
+        kubectl)
+            ver=$(kubectl_latest_version 2>/dev/null) || ver=""
+            ;;
+        helm)
+            ver=$(helm_latest_version 2>/dev/null) || ver=""
             ;;
         awst | gcloudt | tcclit)
             ver="wrapper"
@@ -644,7 +700,120 @@ list_repo() {
     case "$1" in
         glow) printf '%s' "charmbracelet/glow" ;;
         coscli) printf '%s' "tencentyun/coscli" ;;
+        rg) printf '%s' "BurntSushi/ripgrep" ;;
+        mlr) printf '%s' "johnkerl/miller" ;;
+        opencode) printf '%s' "anomalyco/opencode" ;;
+        oci) printf '%s' "oracle/oci-cli" ;;
     esac
+}
+
+# kubectl_latest_version: stable client version from dl.k8s.io.
+kubectl_latest_version() {
+    local ver=""
+    ver=$(http_get "https://dl.k8s.io/release/stable.txt" 2>/dev/null) || ver=""
+    ver=$(normalize_version "$ver")
+    [ -n "$ver" ] || return 1
+    printf '%s\n' "$ver"
+    return 0
+}
+
+# helm_latest_version: latest helm release from get.helm.sh.
+helm_latest_version() {
+    local ver=""
+    ver=$(http_get "https://get.helm.sh/helm-latest-version" 2>/dev/null) || ver=""
+    ver=$(normalize_version "$ver")
+    [ -n "$ver" ] || return 1
+    printf '%s\n' "$ver"
+    return 0
+}
+
+# official_installer_url <cli>
+official_installer_url() {
+    case "$1" in
+        agent)
+            if [ -n "${CLI_TOOLBOX_AGENT_INSTALL_URL:-}" ]; then
+                printf '%s' "$CLI_TOOLBOX_AGENT_INSTALL_URL"
+            else
+                printf '%s' "https://cursor.com/install"
+            fi
+            ;;
+        claude)
+            if [ -n "${CLI_TOOLBOX_CLAUDE_INSTALL_URL:-}" ]; then
+                printf '%s' "$CLI_TOOLBOX_CLAUDE_INSTALL_URL"
+            else
+                printf '%s' "https://claude.ai/install.sh"
+            fi
+            ;;
+        codex)
+            if [ -n "${CLI_TOOLBOX_CODEX_INSTALL_URL:-}" ]; then
+                printf '%s' "$CLI_TOOLBOX_CODEX_INSTALL_URL"
+            else
+                printf '%s' "https://chatgpt.com/codex/install.sh"
+            fi
+            ;;
+        agy)
+            if [ -n "${CLI_TOOLBOX_AGY_INSTALL_URL:-}" ]; then
+                printf '%s' "$CLI_TOOLBOX_AGY_INSTALL_URL"
+            else
+                printf '%s' "https://antigravity.google/cli/install.sh"
+            fi
+            ;;
+        codebuddy)
+            if [ -n "${CLI_TOOLBOX_CODEBUDDY_INSTALL_URL:-}" ]; then
+                printf '%s' "$CLI_TOOLBOX_CODEBUDDY_INSTALL_URL"
+            else
+                printf '%s' "https://www.codebuddy.cn/cli/install.sh"
+            fi
+            ;;
+        oci)
+            if [ -n "${CLI_TOOLBOX_OCI_INSTALL_URL:-}" ]; then
+                printf '%s' "$CLI_TOOLBOX_OCI_INSTALL_URL"
+            else
+                printf '%s' "https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh"
+            fi
+            ;;
+    esac
+}
+
+# official_installer_latest_version <cli>: best-effort stable version lookup.
+official_installer_latest_version() {
+    local cli="$1" body="" ver="" platform=""
+    case "$cli" in
+        opencode)
+            body=$(github_release_json anomalyco/opencode 2>/dev/null) || body=""
+            [ -n "$body" ] && ver=$(github_version_from_json "$body" 2>/dev/null)
+            ;;
+        claude)
+            body=$(http_get "https://downloads.claude.ai/claude-code-releases/stable/manifest.json" 2>/dev/null) || body=""
+            ver=$(printf '%s\n' "$body" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][^"]*\)".*/\1/p' | head -1)
+            ;;
+        codex)
+            body=$(http_get "https://releases.openai.com/codex/latest/manifest.json" 2>/dev/null) || body=""
+            ver=$(printf '%s\n' "$body" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][^"]*\)".*/\1/p' | head -1)
+            ;;
+        agy)
+            detect_platform 2>/dev/null || true
+            case "${TB_OS:-linux}-${TB_ARCH:-amd64}" in
+                linux-amd64) platform=linux_amd64 ;;
+                linux-arm64) platform=linux_arm64 ;;
+                darwin-amd64) platform=darwin_amd64 ;;
+                darwin-arm64) platform=darwin_arm64 ;;
+            esac
+            [ -n "$platform" ] || return 1
+            body=$(http_get "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${platform}.json" 2>/dev/null) || body=""
+            ver=$(printf '%s\n' "$body" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][^"]*\)".*/\1/p' | head -1)
+            ;;
+        agent | codebuddy)
+            return 1
+            ;;
+        oci)
+            body=$(github_release_json oracle/oci-cli 2>/dev/null) || body=""
+            [ -n "$body" ] && ver=$(github_version_from_json "$body" 2>/dev/null)
+            ;;
+    esac
+    [ -n "$ver" ] || return 1
+    printf '%s\n' "$ver"
+    return 0
 }
 
 format_list_row() {
