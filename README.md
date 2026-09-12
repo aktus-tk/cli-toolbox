@@ -142,7 +142,7 @@ export PATH="$HOME/.cli-toolbox/bin:$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 | 列 | 意味 |
 |---|---|
 | STATUS | `managed` / `system` / `missing` / `requires-root` / `requires-package-manager` / `unsupported` |
-| PROVIDER | 主に `uv-tool` / `official-installer` / `official-archive` / `apt` / `brew` / `release-binary` / `local-wrapper` / `system-package` / `unknown`（既存環境では `pipx` 等も表示される場合あり） |
+| PROVIDER | 主に `uv-tool` / `official-installer` / `official-archive` / `apt` / `brew` / `release-binary` / `system-package` / `unknown`（既存環境では `pipx` 等も表示される場合あり） |
 | STATE | `unchanged` / `update-available` / `install-required` / `migration-available` / `unknown` |
 
 例:
@@ -195,7 +195,7 @@ terraform
 `SUPPORTED_CLIS` に含まれるが `targets.txt` に無い CLI（明示指定でインストール）:
 
 ```bash
-az coscli oci kubectl helm awst gcloudt tcclit opencode agent codebuddy claude codex agy
+az coscli oci kubectl helm opencode agent codebuddy claude codex agy
 ```
 
 ## CLI の説明（標準 / 任意）
@@ -216,7 +216,6 @@ az coscli oci kubectl helm awst gcloudt tcclit opencode agent codebuddy claude c
 | 任意 | Cloud CLI | `az` | Azure操作 |
 | 任意 | Cloud CLI | `coscli` | COSへ直接ファイル転送するときだけ |
 | 任意 | Cloud CLI | `oci` | Oracle Cloud操作（`targets.txt`ではコメントアウト中） |
-| 任意 | Cloud CLIラッパー | `awst` / `gcloudt` / `tcclit` | 人間向けの`aws` / `gcloud` / `tccli`ラッパー |
 | 標準 | IaC | `terraform` | IaC調査・変更・検証 |
 | 任意 | Kubernetes | `kubectl` | Kubernetes操作 |
 | 任意 | Kubernetes | `helm` | Kubernetesへのアプリ配布 |
@@ -251,17 +250,10 @@ az coscli oci kubectl helm awst gcloudt tcclit opencode agent codebuddy claude c
 | `claude` | official-installer | official-installer |
 | `codex` | official-installer | official-installer |
 | `agy` | official-installer | official-installer |
-| `awst` / `gcloudt` / `tcclit` | local-wrapper | local-wrapper |
 
-### cloud-cli wrapper
+## 組み合わせ可能な関連ツール
 
-`awst` / `gcloudt` / `tcclit` は外部配布 CLI ではなく、[cloud-cli](https://github.com/aktus-tk/cloud-cli) 内の wrapper です。デフォルトでは `~/github/aktus-tk/cloud-cli` を参照します。配置後、依存する native CLI（`aws` / `gcloud` / `tccli`）の存在を確認します。
-
-| Wrapper | 依存 |
-|---|---|
-| `awst` | `aws` |
-| `gcloudt` | `gcloud` |
-| `tcclit` | `tccli` |
+- [cloud-cli](https://github.com/aktus-tk/cloud-cli) — `aws` / `gcloud` / `tccli` の人間向けラッパー（`awst` / `gcloudt` / `tcclit`）。独立したリポジトリで運用され、cli-toolbox の管理対象外です。
 
 ## 認証情報について
 

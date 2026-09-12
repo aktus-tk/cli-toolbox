@@ -1176,50 +1176,6 @@ install_aws() {
 }
 
 # ---------------------------------------------------------------------------
-# local wrappers
-# ---------------------------------------------------------------------------
-
-install_wrapper() {
-    local name="$1" src="" dep="" dep_path=""
-    TB_STATE=error
-    TB_DETAIL=""
-    _installer_start || return 1
-    src="$CLOUD_CLI_REPO/$(cli_wrapper_source "$name")"
-    if [ ! -f "$src" ]; then
-        TB_DETAIL="wrapper source not found: ${src} (set CLOUD_CLI_REPO)"
-        return 1
-    fi
-    dep=$(cli_wrapper_requires "$name")
-    dep_path=$(resolve_path "$dep") || dep_path=""
-    if [ -z "$dep_path" ]; then
-        TB_DETAIL="native CLI '${dep}' not found (required by ${name})"
-        return 1
-    fi
-    local current=""
-    if [ -L "$CLI_TOOLBOX_HOME/bin/$name" ]; then
-        current=$(readlink "$CLI_TOOLBOX_HOME/bin/$name" 2>/dev/null)
-        if [ "$current" = "$src" ]; then
-            TB_STATE=unchanged
-            TB_DETAIL="wrapper"
-            manifest_record "$name" local-wrapper "wrapper" "$CLI_TOOLBOX_HOME/bin/$name"
-            return 0
-        fi
-    fi
-    if ! atomic_symlink "$src" "$CLI_TOOLBOX_HOME/bin/$name"; then
-        TB_DETAIL="failed to place wrapper symlink"
-        return 1
-    fi
-    manifest_record "$name" local-wrapper "wrapper" "$CLI_TOOLBOX_HOME/bin/$name"
-    TB_STATE=installed
-    TB_DETAIL="wrapper -> ${src}"
-    return 0
-}
-
-install_awst() { install_wrapper awst; }
-install_gcloudt() { install_wrapper gcloudt; }
-install_tcclit() { install_wrapper tcclit; }
-
-# ---------------------------------------------------------------------------
 # delete — remove cli-toolbox managed artifacts only (never system apt/brew)
 # ---------------------------------------------------------------------------
 
@@ -1372,22 +1328,6 @@ _delete_package_cli() {
     return 0
 }
 
-_delete_wrapper() {
-    local name="$1"
-    TB_STATE=error
-    TB_DETAIL=""
-    if ! cli_is_toolbox_managed "$name"; then
-        TB_STATE=skipped-not-managed
-        TB_DETAIL="not managed by cli-toolbox"
-        return 0
-    fi
-    _remove_bin_link "$name"
-    manifest_remove "$name"
-    TB_STATE=deleted
-    TB_DETAIL="removed wrapper symlink"
-    return 0
-}
-
 run_uninstaller() {
     local name="$1" provider=""
     detect_platform 2>/dev/null || true
@@ -1423,7 +1363,6 @@ run_uninstaller() {
                 _delete_aws
             fi
             ;;
-        awst | gcloudt | tcclit) _delete_wrapper "$name" ;;
         *) TB_STATE=error; TB_DETAIL="no uninstaller for ${name}"; return 1 ;;
     esac
     case "${TB_STATE:-error}" in
@@ -1459,9 +1398,6 @@ run_installer() {
         codex) install_codex ;;
         agy) install_agy ;;
         aws) install_aws ;;
-        awst) install_awst ;;
-        gcloudt) install_gcloudt ;;
-        tcclit) install_tcclit ;;
         *) TB_STATE=error; TB_DETAIL="no installer for ${name}" ;;
     esac
     case "${TB_STATE:-error}" in

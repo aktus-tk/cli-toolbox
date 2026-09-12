@@ -201,9 +201,6 @@ _parse_version() {
         terraform)
             out=$("$path" version 2>/dev/null | sed -n 's/^Terraform v\([0-9][^ ]*\).*/\1/p' | head -1)
             ;;
-        awst | gcloudt | tcclit)
-            out="wrapper"
-            ;;
     esac
     out=$(normalize_version "$out")
     printf '%s\n' "$out"

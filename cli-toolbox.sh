@@ -32,7 +32,7 @@ Usage:
 When install, list, or doctor is run without CLI arguments, targets.txt in the repo root is used.
 
 Supported CLIs (install explicitly when omitted from targets.txt):
-  az coscli oci kubectl helm awst gcloudt tcclit
+  az coscli oci kubectl helm
 
 AI agent CLIs (install explicitly; not in targets.txt by default):
   opencode agent (Cursor Agent CLI) codebuddy claude codex agy

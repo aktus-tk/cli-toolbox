@@ -128,7 +128,7 @@ APT / Homebrew だけを扱います。全 OS 共通のパッケージマネー�
 | 列 | 意味 | 例 |
 |---|---|---|
 | STATUS | 導入状態の大分類 | `managed`, `system`, `missing`, `requires-root`, `requires-package-manager`, `unsupported` |
-| PROVIDER | 管理方式 | `apt`, `brew`, `release-binary`, `uv-tool`, `official-archive`, `local-wrapper`, `system-package`, `unknown` |
+| PROVIDER | 管理方式 | `apt`, `brew`, `release-binary`, `uv-tool`, `official-archive`, `system-package`, `unknown` |
 | STATE | 更新要否 | `unchanged`, `update-available`, `install-required`, `migration-available`, `unknown` |
 
 `STATUS=managed` は manifest に cli-toolbox が導入した記録がある場合だけ使います。`~/.cli-toolbox` 内にあるだけでは推測しません。
@@ -139,7 +139,7 @@ CLI とインストール方式は分離します。利用可能な provider:
 
 - `apt`, `brew`, `brew-cask`
 - `uv-tool`, `official-installer`, `official-archive`
-- `release-binary`, `local-wrapper`
+- `release-binary`
 - `system-package`, `unknown`
 
 ## `lib/targets.sh` — targets.txt 読み込み
@@ -164,7 +164,6 @@ CLI ごとの install / delete ロジックです。
 | gcloud | `install_gcloud` | 公式 tar.gz を `tools/` に展開 |
 | GitHub release | `install_glow`, `install_rg`, `install_mlr` 等 | バイナリ + checksum 検証 |
 | aws | `install_aws` | Linux: 公式 installer / macOS: brew |
-| wrapper | `install_awst` 等 | `cloud-cli` リポジトリの symlink |
 | delete | `_delete_*`, `run_uninstaller` | 管理分のみ削除 |
 | dispatch | `run_installer`, `run_uninstaller` | CLI 名から関数を振り分け |
 
@@ -259,7 +258,6 @@ cli-toolbox.sh
 | `CLI_TOOLBOX_PYPI_BASE` | PyPI JSON ベース URL | `https://pypi.org` |
 | `CLI_TOOLBOX_UV_INSTALL_URL` | uv standalone installer URL | `https://astral.sh/uv/install.sh` |
 | `CLI_TOOLBOX_CURL` | `curl` コマンド差し替え（テスト用） | `curl` |
-| `CLOUD_CLI_REPO` | cloud-cli wrapper のソースリポジトリ | `~/github/aktus-tk/cloud-cli` |
 
 `UV_TOOL_BIN_DIR` と `GITHUB_TOKEN` は uv / GitHub の標準環境変数です。cli-toolbox はそれぞれ `tccli` の配置先と GitHub API のレート制限回避に利用しますが、利用者向けヘルプには記載しません。
 

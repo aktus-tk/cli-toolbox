@@ -2,13 +2,8 @@
 # lib/providers.sh — CLI provider metadata, inspection, and list status logic.
 # Requires lib/common.sh and lib/packages.sh to be sourced first.
 
-if [ -z "${CLOUD_CLI_REPO:-}" ]; then
-    CLOUD_CLI_REPO="${HOME:-}/github/aktus-tk/cloud-cli"
-fi
-export CLOUD_CLI_REPO
-
 SUPPORTED_CLIS=(uv gh glow coscli rg mlr tccli aws gcloud az terraform \
-    kubectl helm oci opencode agent codebuddy claude codex agy awst gcloudt tcclit)
+    kubectl helm oci opencode agent codebuddy claude codex agy)
 UNSUPPORTED_CLIS=()
 
 is_supported() {
@@ -41,7 +36,6 @@ resolve_provider() {
     case "$cli" in
         uv) printf '%s' "official-installer" ;;
         tccli) printf '%s' "uv-tool" ;;
-        awst | gcloudt | tcclit) printf '%s' "local-wrapper" ;;
         gcloud) printf '%s' "official-archive" ;;
         coscli) printf '%s' "release-binary" ;;
         aws)
@@ -126,22 +120,6 @@ cli_apt_package() {
 cli_uv_tool_package() {
     case "$1" in
         tccli) printf '%s' "tccli" ;;
-    esac
-}
-
-cli_wrapper_source() {
-    case "$1" in
-        awst) printf '%s' "aws-cli/bin/awst" ;;
-        gcloudt) printf '%s' "g-cli/bin/gcloudt" ;;
-        tcclit) printf '%s' "tc-cli/bin/tcclit" ;;
-    esac
-}
-
-cli_wrapper_requires() {
-    case "$1" in
-        awst) printf '%s' "aws" ;;
-        gcloudt) printf '%s' "gcloud" ;;
-        tcclit) printf '%s' "tccli" ;;
     esac
 }
 
@@ -407,7 +385,7 @@ classify_path_provider() {
 
     if is_managed "$real" || is_managed "$path"; then
         case "$(cli_preferred_provider "$cli")" in
-            official-installer | official-archive | release-binary | local-wrapper)
+            official-installer | official-archive | release-binary)
                 printf '%s' "$(cli_preferred_provider "$cli")"
                 return 0
                 ;;
@@ -567,7 +545,7 @@ inspect_cli() {
                 return 0
             fi
             ;;
-        official-installer | release-binary | local-wrapper)
+        official-installer | release-binary)
             manifest_info=$(manifest_lookup "$name" 2>/dev/null) || manifest_info=""
             if [ -n "$manifest_info" ]; then
                 m_provider=${manifest_info%%$'\t'*}
@@ -615,16 +593,10 @@ inspect_cli() {
 
     latest="${TB_LIST_LATEST:-unknown}"
     current="${TB_LIST_CURRENT:--}"
-    if [ "$preferred" = "local-wrapper" ] && [ "$TB_LIST_STATUS" = "managed" ]; then
-        TB_LIST_STATE="unchanged"
-        return 0
-    fi
     if [ "$current" = "-" ] || [ -z "$current" ]; then
         TB_LIST_STATE="install-required"
     elif [ "$latest" = "unknown" ]; then
         TB_LIST_STATE="unknown"
-    elif [ "$latest" = "wrapper" ]; then
-        TB_LIST_STATE="unchanged"
     elif [ "$current" = "$latest" ]; then
         TB_LIST_STATE="unchanged"
     elif version_gt "$latest" "$current"; then
@@ -683,9 +655,6 @@ list_latest_version() {
             ;;
         helm)
             ver=$(helm_latest_version 2>/dev/null) || ver=""
-            ;;
-        awst | gcloudt | tcclit)
-            ver="wrapper"
             ;;
     esac
     if [ -z "$ver" ]; then

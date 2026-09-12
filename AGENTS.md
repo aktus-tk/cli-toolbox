@@ -38,7 +38,6 @@ CLIとインストール方式を分離してください。
 - `official-installer`
 - `official-archive`
 - `release-binary`
-- `local-wrapper`
 - `system-package`
 - `unknown`
 

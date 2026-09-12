@@ -396,14 +396,6 @@ cli_sandbox() {
     CLI_RC=$?
 }
 
-make_cloud_cli_fixture() {
-    local base="$1"
-    mkdir -p "$base/aws-cli/bin" "$base/g-cli/bin" "$base/tc-cli/bin"
-    make_bin "$base/aws-cli/bin/awst" 'echo wrapper'
-    make_bin "$base/g-cli/bin/gcloudt" 'echo wrapper'
-    make_bin "$base/tc-cli/bin/tcclit" 'echo wrapper'
-}
-
 FIX_GLOW=$(test_tmp); make_glow_fixture "$FIX_GLOW" 3.0.0
 FIX_COSCLI=$(test_tmp); make_coscli_fixture "$FIX_COSCLI" 1.0.9
 FIX_RG=$(test_tmp); make_rg_fixture "$FIX_RG" 15.0.0
@@ -413,7 +405,6 @@ FIX_UV_REL=$(test_tmp); make_uv_release_fixture "$FIX_UV_REL" 0.12.12
 FIX_UV_INST=$(test_tmp); make_uv_installer_fixture "$FIX_UV_INST" 0.12.12
 FIX_PYPI=$(test_tmp); make_pypi_fixture "$FIX_PYPI" tccli 3.1.165.1
 FIX_AWS=$(test_tmp); make_aws_fixture "$FIX_AWS" 2.36.42
-FIX_CLOUD=$(test_tmp); make_cloud_cli_fixture "$FIX_CLOUD"
 FIX_OPENCODE=$(test_tmp); make_opencode_fixture "$FIX_OPENCODE" 1.0.0
 FIX_AGENT=$(test_tmp); make_agent_installer_fixture "$FIX_AGENT" 1.0.0
 FIX_CODEX=$(test_tmp); make_codex_installer_fixture "$FIX_CODEX" 2.0.0
@@ -433,7 +424,6 @@ setup_clean_env() {
     export CLI_TOOLBOX_PYPI_BASE="file://$FIX_PYPI/pypi"
     export CLI_TOOLBOX_UV_INSTALL_URL="file://$FIX_UV_INST/install.sh"
     export UV_TOOL_BIN_DIR="$H/.local/bin"
-    export CLOUD_CLI_REPO="$FIX_CLOUD"
     mkdir -p "$H/bin" "$H/.local/bin"
     export PATH="$H/bin:$H/.local/bin:$PATH"
     unset GITHUB_TOKEN CLI_TOOLBOX_CURL
@@ -940,19 +930,8 @@ BREW_OUT=$(
 assert_contains "brew gh install" "$BREW_OUT" "state=installed"
 
 # ---------------------------------------------------------------------------
-# wrappers / system CLI preservation
+# system CLI preservation
 # ---------------------------------------------------------------------------
-
-OUT=$(test_file)
-H=$(new_home)
-setup_clean_env "$H"
-make_bin "$H/bin/aws" 'echo aws-cli/2.0.0'
-make_bin "$H/bin/gcloud" 'echo Google Cloud SDK 1.0.0'
-make_bin "$H/.local/bin/tccli" 'echo 3.0.0'
-export PATH="$H/bin:$H/.local/bin:$PATH"
-cli "$OUT" install awst gcloudt tcclit
-assert_contains_re "awst wrapper" "$(cat "$OUT")" 'awst[[:space:]]+installed'
-assert_true "awst symlink" test -L "$H/bin/awst"
 
 OUT=$(test_file)
 H=$(new_home)
