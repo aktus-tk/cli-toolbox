@@ -11,6 +11,7 @@
 - [ ] amd64/arm64 の配布物を確認した
 - [ ] `list_latest_version` / `list_repo`（`lib/providers.sh`）で stable 最新版の取得を実装した
 - [ ] `_parse_version`（`lib/common.sh`）で version parser を実装した
+- [ ] `official-installer` を使う場合は `official_installer_url` に公式ドメインの URL を定義した（未確認スクリプトの `curl | bash` は不可。ダウンロードと実行を分離）
 - [ ] 公式 checksum がある場合は installer で検証した
 - [ ] `install_<cli>` と `run_installer`（`lib/installers.sh`）で atomic install/update を実装した
 - [ ] `manifest_record` で実際の provider と path を記録した

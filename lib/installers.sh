@@ -817,6 +817,35 @@ install_helm() {
     _finish_install helm "$installed" "$ver"
 }
 
+_snapshot_shell_rc_state() {
+    local snapdir="$1" home="${HOME:-}" f=""
+    [ -n "$home" ] || return 0
+    mkdir -p "$snapdir"
+    : >"$snapdir/manifest"
+    for f in .bashrc .bash_profile .profile .zshrc; do
+        if [ -f "$home/$f" ]; then
+            cp -p "$home/$f" "$snapdir/$f"
+            printf '%s\n' "$f" >>"$snapdir/manifest"
+        fi
+    done
+}
+
+_restore_shell_rc_state() {
+    local snapdir="$1" home="${HOME:-}" f=""
+    [ -n "$home" ] || return 0
+    [ -f "$snapdir/manifest" ] || return 0
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        cp -p "$snapdir/$f" "$home/$f"
+        rm -f "$home/${f}.backup"
+    done <"$snapdir/manifest"
+    for f in .bashrc .bash_profile .profile .zshrc; do
+        if [ ! -f "$snapdir/$f" ] && [ -f "$home/$f" ]; then
+            rm -f "$home/$f" "$home/${f}.backup"
+        fi
+    done
+}
+
 install_oci() {
     local provider=""
     _installer_start || return 1
@@ -851,12 +880,16 @@ install_oci() {
     chmod +x "$tmp/install.sh"
     mkdir -p "$CLI_TOOLBOX_HOME/bin" "$CLI_TOOLBOX_HOME/tools/oci-cli"
     log_info "oci: running official installer (--install-dir ${CLI_TOOLBOX_HOME}/tools/oci-cli --exec-dir ${CLI_TOOLBOX_HOME}/bin)"
-    if ! sh "$tmp/install.sh" --accept-all-defaults --no-tty \
+    _snapshot_shell_rc_state "$tmp/rc-snap"
+    if ! "$tmp/install.sh" --accept-all-defaults --no-tty \
         --install-dir "$CLI_TOOLBOX_HOME/tools/oci-cli" \
-        --exec-dir "$CLI_TOOLBOX_HOME/bin" >/dev/null 2>&1; then
+        --exec-dir "$CLI_TOOLBOX_HOME/bin" \
+        --script-dir "$CLI_TOOLBOX_HOME/tools/oci-cli/scripts" >/dev/null 2>&1; then
+        _restore_shell_rc_state "$tmp/rc-snap"
         TB_DETAIL="official installer failed"
         return 1
     fi
+    _restore_shell_rc_state "$tmp/rc-snap"
     path="$CLI_TOOLBOX_HOME/bin/oci"
     if [ ! -x "$path" ]; then
         path=$(resolve_path oci) || path=""
@@ -896,6 +929,8 @@ _opencode_release_asset() {
     esac
 }
 
+# Run an official install script from a known official URL (see official_installer_url).
+# Always download to a temp file first; never curl|pipe|bash unverified scripts.
 _run_official_installer_script() {
     local cli="$1" url="$2"
     shift 2
@@ -925,11 +960,11 @@ _run_official_installer_script() {
     chmod +x "$tmp/install.sh"
     log_info "${cli}: running official installer"
     if [ "$#" -gt 0 ]; then
-        if ! sh "$tmp/install.sh" "$@" >/dev/null 2>&1; then
+        if ! "$tmp/install.sh" "$@" >/dev/null 2>&1; then
             TB_DETAIL="official installer failed"
             return 1
         fi
-    elif ! sh "$tmp/install.sh" >/dev/null 2>&1; then
+    elif ! "$tmp/install.sh" >/dev/null 2>&1; then
         TB_DETAIL="official installer failed"
         return 1
     fi

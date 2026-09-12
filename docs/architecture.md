@@ -164,6 +164,7 @@ CLI ごとの install / delete ロジックです。
 | gcloud | `install_gcloud` | 公式 tar.gz を `tools/` に展開 |
 | GitHub release | `install_glow`, `install_rg`, `install_mlr` 等 | バイナリ + checksum 検証 |
 | aws | `install_aws` | Linux: 公式 installer / macOS: brew |
+| official-installer | `_run_official_installer_script`, `install_claude` 等 | 公式ドメインの install.sh をダウンロードしてから実行（`curl \| bash` は使わない） |
 | delete | `_delete_*`, `run_uninstaller` | 管理分のみ削除 |
 | dispatch | `run_installer`, `run_uninstaller` | CLI 名から関数を振り分け |
 

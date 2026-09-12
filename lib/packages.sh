@@ -76,6 +76,41 @@ can_sudo() {
     sudo -n true 2>/dev/null
 }
 
+# ensure_unzip: install unzip via apt (Linux) or Homebrew (macOS) when missing.
+ensure_unzip() {
+    cmd_exists unzip && return 0
+    detect_platform
+    case "${TB_OS:-linux}" in
+        darwin)
+            if ! has_brew; then
+                log_error "ensure_unzip: Homebrew is required to install unzip on macOS"
+                return 1
+            fi
+            log_info "unzip: installing via Homebrew"
+            if ! brew_install_or_upgrade unzip; then
+                log_error "ensure_unzip: brew install unzip failed"
+                return 1
+            fi
+            ;;
+        *)
+            if ! has_apt; then
+                log_error "ensure_unzip: apt is required to install unzip on Linux"
+                return 1
+            fi
+            log_info "unzip: installing via apt (sudo)"
+            if ! apt_install_or_upgrade unzip; then
+                log_error "ensure_unzip: apt install unzip failed"
+                return 1
+            fi
+            ;;
+    esac
+    if ! cmd_exists unzip; then
+        log_error "ensure_unzip: unzip still not available after install"
+        return 1
+    fi
+    return 0
+}
+
 apt_run() {
     if [ "$(id -u)" -eq 0 ]; then
         "$@"

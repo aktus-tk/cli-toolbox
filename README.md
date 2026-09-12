@@ -37,7 +37,7 @@
 - `pipx` は cli-toolbox の管理対象外です（インストールしません）。
 - OS に `pipx` が既に入っていても、cli-toolbox は削除・上書きしません。`list` にも表示しません。
 - `pip install --user`、グローバル `pip install`、独自 venv による新規導入は行いません。
-- `uv` 自体は [公式 standalone installer](https://docs.astral.sh/uv/getting-started/installation/) で導入します（`curl | bash` は使わず、スクリプトをダウンロードしてから実行）。
+- `uv` 自体は [公式 standalone installer](https://docs.astral.sh/uv/getting-started/installation/) で導入します（公式ドメインからスクリプトをダウンロードしてから実行。`curl | bash` のようなパイプ実行はしません）。
 - **AWS CLI v2**（Linux）は公式インストーラー、**macOS** は Homebrew を使用します。
 - cli-toolbox 管理外の既存 CLI（system / pipx / pyenv など）は勝手に削除・更新しません。
 
@@ -261,7 +261,8 @@ az coscli oci kubectl helm opencode agent codebuddy claude codex agy
 
 ## セキュリティ方針
 
-- `curl | bash` は使いません（ダウンロードと実行を分離）
+- 未確認のスクリプトを `curl | bash` で直接実行しません
+- 公式提供元が標準のインストール方法として案内しているインストーラー（例: Claude Code）は、公式ドメインから取得したうえで使用します（ダウンロードと実行を分離）
 - 公式配布元のみを使用
 - 公式チェックサムが公開されている場合は必ず検証
 - root 権限は Linux APT 導入時のみ（明示的に `sudo` を使用）

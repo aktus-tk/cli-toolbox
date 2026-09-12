@@ -471,6 +471,50 @@ _archive_entries_safe() {
     return 0
 }
 
+# _zip_list_entries <archive>: one path per line; prefers unzip, falls back to python3.
+_zip_list_entries() {
+    local archive="$1"
+    if cmd_exists unzip; then
+        unzip -Z1 "$archive" 2>/dev/null
+        return $?
+    fi
+    if cmd_exists python3; then
+        python3 -c '
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    for name in z.namelist():
+        print(name)
+' "$archive"
+        return $?
+    fi
+    log_error "_zip_list_entries: unzip or python3 is required to read $archive"
+    return 1
+}
+
+# _zip_extract <archive> <destdir>: prefers unzip, falls back to python3.
+_zip_extract() {
+    local archive="$1" destdir="$2"
+    if cmd_exists unzip; then
+        unzip -q "$archive" -d "$destdir" >/dev/null 2>&1
+        return $?
+    fi
+    if cmd_exists python3; then
+        python3 -c '
+import os, stat, sys, zipfile
+archive, destdir = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(archive) as z:
+    for info in z.infolist():
+        extracted = z.extract(info, destdir)
+        mode = (info.external_attr >> 16) & 0o7777
+        if mode:
+            os.chmod(extracted, stat.S_IMODE(mode))
+' "$archive" "$destdir" >/dev/null 2>&1
+        return $?
+    fi
+    log_error "_zip_extract: unzip or python3 is required to extract $archive"
+    return 1
+}
+
 # extract_archive <archive> <destdir>: tar.gz/tgz or zip; creates destdir.
 extract_archive() {
     local archive="$1" destdir="$2" entries
@@ -482,10 +526,9 @@ extract_archive() {
     case "$archive" in
         *.zip)
             if ! cmd_exists unzip; then
-                log_error "extract_archive: unzip is required to extract $archive"
-                return 1
+                ensure_unzip || true
             fi
-            entries=$(unzip -Z1 "$archive" 2>/dev/null) || {
+            entries=$(_zip_list_entries "$archive") || {
                 log_error "extract_archive: cannot read zip: $archive"
                 return 1
             }
@@ -493,8 +536,8 @@ extract_archive() {
                 log_error "extract_archive: unsafe entries (path traversal) rejected in $archive"
                 return 1
             fi
-            unzip -q "$archive" -d "$destdir" >/dev/null 2>&1 || {
-                log_error "extract_archive: unzip failed: $archive"
+            _zip_extract "$archive" "$destdir" || {
+                log_error "extract_archive: zip extraction failed: $archive"
                 return 1
             }
             ;;

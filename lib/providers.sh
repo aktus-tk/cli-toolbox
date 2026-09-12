@@ -696,7 +696,8 @@ helm_latest_version() {
     return 0
 }
 
-# official_installer_url <cli>
+# official_installer_url <cli>: vendor official-domain installer URL only.
+# Override env vars (CLI_TOOLBOX_*_INSTALL_URL) are for tests; production uses the defaults below.
 official_installer_url() {
     case "$1" in
         agent)

@@ -369,6 +369,27 @@ EOF
     chmod +x "$base/install.sh"
 }
 
+make_claude_installer_fixture() {
+    local base="$1" ver="$2"
+    mkdir -p "$base"
+    cat >"$base/install.sh" <<EOF
+#!/bin/bash
+set -e
+TARGET="\$1"
+if [[ -n "\$TARGET" ]] && [[ ! "\$TARGET" =~ ^stable\$ ]]; then
+    echo "unexpected target: \$TARGET" >&2
+    exit 1
+fi
+mkdir -p "\$HOME/.local/bin"
+cat > "\$HOME/.local/bin/claude" <<'BIN'
+#!/bin/sh
+echo "claude version ${ver}"
+BIN
+chmod +x "\$HOME/.local/bin/claude"
+EOF
+    chmod +x "$base/install.sh"
+}
+
 write_targets_file() {
     local path="$1"
     shift
@@ -407,6 +428,7 @@ FIX_PYPI=$(test_tmp); make_pypi_fixture "$FIX_PYPI" tccli 3.1.165.1
 FIX_AWS=$(test_tmp); make_aws_fixture "$FIX_AWS" 2.36.42
 FIX_OPENCODE=$(test_tmp); make_opencode_fixture "$FIX_OPENCODE" 1.0.0
 FIX_AGENT=$(test_tmp); make_agent_installer_fixture "$FIX_AGENT" 1.0.0
+FIX_CLAUDE=$(test_tmp); make_claude_installer_fixture "$FIX_CLAUDE" 3.0.0
 FIX_CODEX=$(test_tmp); make_codex_installer_fixture "$FIX_CODEX" 2.0.0
 FIX_AGY=$(test_tmp); make_agy_installer_fixture "$FIX_AGY" 1.2.1
 FIX_KUBECTL=$(test_tmp); make_kubectl_fixture "$FIX_KUBECTL" 1.30.0
@@ -475,6 +497,66 @@ DISPLAY=$(
     cli_display_name agent
 )
 assert_contains "agent display name" "$DISPLAY" "Cursor Agent CLI"
+
+# ---------------------------------------------------------------------------
+# unit: ensure_unzip (apt / brew)
+# ---------------------------------------------------------------------------
+
+ENSURE_UNZIP_APT=$(
+    source_libs
+    H=$(test_tmp)
+    export TB_OS=linux TB_ARCH=amd64
+    export PATH="$H/bin:$PATH"
+    has_apt() { return 0; }
+    apt_install_or_upgrade() {
+        make_bin "$H/bin/unzip" 'exit 0'
+        return 0
+    }
+    ensure_unzip && cmd_exists unzip && printf 'ok'
+)
+assert_contains "ensure_unzip via apt" "$ENSURE_UNZIP_APT" "ok"
+
+ENSURE_UNZIP_BREW=$(
+    source_libs
+    H=$(test_tmp)
+    export TB_OS=darwin TB_ARCH=arm64
+    export PATH="$H/bin:$PATH"
+    has_brew() { return 0; }
+    brew_install_or_upgrade() {
+        make_bin "$H/bin/unzip" 'exit 0'
+        return 0
+    }
+    ensure_unzip && cmd_exists unzip && printf 'ok'
+)
+assert_contains "ensure_unzip via brew" "$ENSURE_UNZIP_BREW" "ok"
+
+# ---------------------------------------------------------------------------
+# unit: extract_archive zip (python3 fallback when unzip is absent)
+# ---------------------------------------------------------------------------
+
+ZIP_EXTRACT_OUT=$(
+    source_libs
+    ensure_unzip() { return 1; }
+    base=$(test_tmp)
+    mkdir -p "$base/src/sub"
+    printf 'hello\n' >"$base/src/sub/file.txt"
+    python3 - "$base/src" "$base/test.zip" <<'PY'
+import sys, zipfile, os
+src, dst = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as z:
+    for root, _, files in os.walk(src):
+        for f in files:
+            p = os.path.join(root, f)
+            z.write(p, os.path.relpath(p, src))
+PY
+    out=$(test_tmp)
+    PATH_NO_UNZIP=$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r d; do
+        [ -x "$d/unzip" ] || printf '%s\n' "$d"
+    done | paste -sd: -)
+    PATH="$PATH_NO_UNZIP" extract_archive "$base/test.zip" "$out" \
+        && test -f "$out/sub/file.txt" && printf 'ok'
+)
+assert_contains "extract_archive zip without unzip" "$ZIP_EXTRACT_OUT" "ok"
 
 # ---------------------------------------------------------------------------
 # unit: version_gt / resolve_real_path / resolve_provider
@@ -1013,10 +1095,13 @@ H=$(new_home)
 setup_clean_env "$H"
 export CLI_TOOLBOX_API_BASE="file://$FIX_OPENCODE/api"
 export CLI_TOOLBOX_AGENT_INSTALL_URL="file://$FIX_AGENT/install.sh"
-cli "$OUT" install opencode agent
+export CLI_TOOLBOX_CLAUDE_INSTALL_URL="file://$FIX_CLAUDE/install.sh"
+cli "$OUT" install opencode agent claude
 assert_contains_re "opencode install" "$(cat "$OUT")" 'opencode[[:space:]]+installed'
 assert_contains_re "agent install" "$(cat "$OUT")" 'agent \(Cursor Agent CLI\)[[:space:]]+installed'
+assert_contains_re "claude install" "$(cat "$OUT")" 'claude[[:space:]]+installed'
 assert_true "agent binary exists" test -x "$H/.local/bin/agent"
+assert_true "claude binary exists" test -x "$H/.local/bin/claude"
 
 OUT=$(test_file)
 H=$(new_home)
