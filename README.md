@@ -162,25 +162,31 @@ az       missing  -         2.77.0   -                            apt
 引数なしの `install` / `list` / `doctor` は、リポジトリ直下の `targets.txt` を使います。
 
 ```text
-# Core cloud/ops CLIs
+# Standard CLIs
 uv
 gh
-tccli
+rg
+glow
+mlr
 aws
 gcloud
-az
+tccli
 terraform
-kubectl
-helm
-# oci
 
-# AI agents
-opencode
-agent       # Cursor Agent CLI
-codebuddy
-claude
-codex
-agy
+# Optional CLIs (uncomment to add to default install, or install explicitly)
+# az
+# coscli
+# oci
+# kubectl
+# helm
+
+# AI agents (optional)
+# opencode
+# agent       # Cursor Agent CLI
+# codebuddy
+# claude
+# codex
+# agy
 ```
 
 - 1行1CLI、空行と `#` 行頭コメントを無視、行末 `# コメント` を除去
@@ -189,8 +195,37 @@ agy
 `SUPPORTED_CLIS` に含まれるが `targets.txt` に無い CLI（明示指定でインストール）:
 
 ```bash
-glow coscli rg mlr awst gcloudt tcclit
+az coscli oci kubectl helm awst gcloudt tcclit opencode agent codebuddy claude codex agy
 ```
+
+## CLI の説明（標準 / 任意）
+
+- **標準**: `targets.txt` に含まれ、引数なしの `install` / `list` / `doctor` の対象。
+- **任意**: `SUPPORTED_CLIS` に含まれるが `targets.txt` に無い CLI。`install <name>` で明示指定する。
+
+| 区分 | 種別 | CLI | 理由 |
+|---|---|---|---|
+| 標準 | CLIツール | `uv` | Python製CLIの実行基盤（`uv tool`で`tccli`等を隔離） |
+| 標準 | CLIツール | `gh` | GitHub操作 |
+| 標準 | CLIツール | `rg` | 高速ファイル検索（ripgrep）が必要なときだけ |
+| 標準 | CLIツール | `glow` | 人間がMarkdownを端末表示するときだけ |
+| 標準 | CLIツール | `mlr` | CSV・JSONなどのデータ整形（Miller）が必要なときだけ |
+| 標準 | Cloud CLI | `aws` | AWS操作 |
+| 標準 | Cloud CLI | `gcloud` | GCP操作 |
+| 標準 | Cloud CLI | `tccli` | Tencent Cloud操作 |
+| 任意 | Cloud CLI | `az` | Azure操作 |
+| 任意 | Cloud CLI | `coscli` | COSへ直接ファイル転送するときだけ |
+| 任意 | Cloud CLI | `oci` | Oracle Cloud操作（`targets.txt`ではコメントアウト中） |
+| 任意 | Cloud CLIラッパー | `awst` / `gcloudt` / `tcclit` | 人間向けの`aws` / `gcloud` / `tccli`ラッパー |
+| 標準 | IaC | `terraform` | IaC調査・変更・検証 |
+| 任意 | Kubernetes | `kubectl` | Kubernetes操作 |
+| 任意 | Kubernetes | `helm` | Kubernetesへのアプリ配布 |
+| 任意 | AI Agent | `opencode` | AIエージェントCLI（OpenCode） |
+| 任意 | AI Agent | `agent` | AIエージェントCLI（Cursor Agent CLI） |
+| 任意 | AI Agent | `codebuddy` | AIエージェントCLI（CodeBuddy） |
+| 任意 | AI Agent | `claude` | AIエージェントCLI（Claude Code） |
+| 任意 | AI Agent | `codex` | AIエージェントCLI（Codex） |
+| 任意 | AI Agent | `agy` | AIエージェントCLI（Antigravity） |
 
 ## CLI ごとの管理方式（provider 選択表）
 

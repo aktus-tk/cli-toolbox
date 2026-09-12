@@ -1,19 +1,25 @@
-# Core cloud/ops CLIs
+# Standard CLIs
 uv
 gh
-tccli
+rg
+glow
+mlr
 aws
 gcloud
-az
+tccli
 terraform
-kubectl
-helm
-# oci
 
-# AI agents
-opencode
-agent       # Cursor Agent CLI
-codebuddy
-claude
-codex
-agy
+# Optional CLIs (uncomment to add to default install, or install explicitly)
+# az
+# coscli
+# oci
+# kubectl
+# helm
+
+# AI agents (optional)
+# opencode
+# agent       # Cursor Agent CLI
+# codebuddy
+# claude
+# codex
+# agy

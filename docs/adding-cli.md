@@ -36,6 +36,6 @@
 ## 分類の目安
 
 - **targets.txt**: 引数なし `install` / `list` / `doctor` の対象。利用者が日常的に収束させたい CLI。
-- **supported only**: `SUPPORTED_CLIS` にあるが `targets.txt` に無い CLI。`install <name>` で明示指定（例: `glow`, `coscli`, `rg`, `mlr`）。
+- **supported only**: `SUPPORTED_CLIS` にあるが `targets.txt` に無い CLI。`install <name>` で明示指定（例: `az`, `coscli`, `oci`, `kubectl`, `helm`）。
 - `targets.txt` からコメントアウトしても自動削除しない。削除は `delete` / `remove` / `uninstall` のみ。
 - RHEMS 固有の CLI（例: `tc-assume`）は個人版リポジトリへ追加しない。

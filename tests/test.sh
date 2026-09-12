@@ -608,7 +608,7 @@ assert_contains "gcloud_archive_url linux amd64" "$GCURL_OUT" "linux-x86_64"
 assert_contains "gcloud_archive_url darwin arm64" "$GCURL_OUT" "darwin-arm"
 
 # ---------------------------------------------------------------------------
-# list: pipx absent, PROVIDER column, az requires-root/missing
+# list: pipx absent, PROVIDER column, targets rows, az requires-root/missing
 # ---------------------------------------------------------------------------
 
 OUT=$(test_file)
@@ -618,7 +618,8 @@ cli "$OUT" list
 assert_not_contains "list: pipx not shown" "$(cat "$OUT")" "pipx"
 assert_contains "list: PROVIDER header" "$(cat "$OUT")" "PROVIDER"
 assert_contains "list: tccli provider uv-tool policy" "$(cat "$OUT")" "tccli"
-assert_contains "list: az row present" "$(cat "$OUT")" "az"
+assert_contains "list: terraform row present (target)" "$(cat "$OUT")" "terraform"
+assert_not_contains "list: az omitted (not in targets)" "$(cat "$OUT")" "az"
 
 OUT=$(test_file)
 AZ_OUT=$(
