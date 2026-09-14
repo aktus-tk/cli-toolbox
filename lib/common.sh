@@ -135,6 +135,12 @@ _parse_version() {
         mlr)
             out=$("$path" --version 2>/dev/null | sed -n 's/^mlr \([0-9][^ ]*\).*/\1/p' | head -1)
             ;;
+        granted)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^Granted version: \([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
+        saml2aws)
+            out=$("$path" --version 2>/dev/null | sed -n '1s/^\([0-9][^ ]*\).*/\1/p')
+            ;;
         opencode)
             out=$("$path" --version 2>/dev/null | sed -n 's/^opencode version \([0-9][^ ]*\).*/\1/p' | head -1)
             if [ -z "$out" ]; then

@@ -12,6 +12,8 @@ terraform
 # Optional CLIs (uncomment to add to default install, or install explicitly)
 # az
 # coscli
+# granted
+# saml2aws
 # oci
 # kubectl
 # helm

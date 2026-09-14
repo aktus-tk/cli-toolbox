@@ -176,6 +176,8 @@ terraform
 # Optional CLIs (uncomment to add to default install, or install explicitly)
 # az
 # coscli
+# granted
+# saml2aws
 # oci
 # kubectl
 # helm
@@ -195,7 +197,7 @@ terraform
 `SUPPORTED_CLIS` に含まれるが `targets.txt` に無い CLI（明示指定でインストール）:
 
 ```bash
-az coscli oci kubectl helm opencode agent codebuddy claude codex agy
+az coscli granted saml2aws oci kubectl helm opencode agent codebuddy claude codex agy
 ```
 
 ## CLI の説明（標準 / 任意）
@@ -213,6 +215,8 @@ az coscli oci kubectl helm opencode agent codebuddy claude codex agy
 | 標準 | Cloud CLI | `aws` | AWS操作 |
 | 標準 | Cloud CLI | `gcloud` | GCP操作 |
 | 標準 | Cloud CLI | `tccli` | Tencent Cloud操作 |
+| 任意 | Cloud CLI | `granted` | AWSロール/SSOアクセス（Granted） |
+| 任意 | Cloud CLI | `saml2aws` | SAML IdP 経由の AWS 一時認証情報 |
 | 任意 | Cloud CLI | `az` | Azure操作 |
 | 任意 | Cloud CLI | `coscli` | COSへ直接ファイル転送するときだけ |
 | 任意 | Cloud CLI | `oci` | Oracle Cloud操作（`targets.txt`ではコメントアウト中） |
@@ -233,6 +237,8 @@ az coscli oci kubectl helm opencode agent codebuddy claude codex agy
 | `uv` | official-installer | official-installer |
 | `tccli` | uv-tool | uv-tool |
 | `aws` | official-installer | brew |
+| `granted` | release-binary | brew |
+| `saml2aws` | release-binary | brew（未導入時は release-binary） |
 | `gh` | apt | brew |
 | `gcloud` | official-archive | official-archive |
 | `az` | apt | brew |

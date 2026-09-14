@@ -19,6 +19,8 @@ cli_package_name() {
                 rg) printf '%s' "ripgrep" ;;
                 mlr) printf '%s' "miller" ;;
                 opencode) printf '%s' "opencode" ;;
+                granted) printf '%s' "granted" ;;
+                saml2aws) printf '%s' "saml2aws" ;;
                 codebuddy) printf '%s' "codebuddy-code" ;;
                 terraform) printf '%s' "terraform" ;;
                 oci) printf '%s' "oci-cli" ;;

@@ -2,7 +2,7 @@
 # lib/providers.sh — CLI provider metadata, inspection, and list status logic.
 # Requires lib/common.sh and lib/packages.sh to be sourced first.
 
-SUPPORTED_CLIS=(uv gh glow coscli rg mlr tccli aws gcloud az terraform \
+SUPPORTED_CLIS=(uv gh glow coscli rg mlr tccli aws gcloud granted saml2aws az terraform \
     kubectl helm oci opencode agent codebuddy claude codex agy)
 UNSUPPORTED_CLIS=()
 
@@ -60,6 +60,26 @@ resolve_provider() {
                     fi
                     ;;
                 *) printf '%s' "release-binary" ;;
+            esac
+            ;;
+        granted)
+            case "$os" in
+                darwin) printf '%s' "brew" ;;
+                linux) printf '%s' "release-binary" ;;
+                *) printf '%s' "unknown" ;;
+            esac
+            ;;
+        saml2aws)
+            case "$os" in
+                darwin)
+                    if has_brew; then
+                        printf '%s' "brew"
+                    else
+                        printf '%s' "release-binary"
+                    fi
+                    ;;
+                linux) printf '%s' "release-binary" ;;
+                *) printf '%s' "unknown" ;;
             esac
             ;;
         kubectl | helm)
@@ -611,7 +631,7 @@ list_latest_version() {
     local name="$1" body ver="" pkg="" provider=""
     provider=$(cli_preferred_provider "$name")
     case "$name" in
-        glow | coscli | rg | mlr | opencode)
+        glow | coscli | rg | mlr | opencode | granted | saml2aws)
             body=$(github_release_json "$(list_repo "$name")" 2>/dev/null) || body=""
             [ -n "$body" ] && ver=$(github_version_from_json "$body" 2>/dev/null)
             ;;
@@ -672,6 +692,8 @@ list_repo() {
         rg) printf '%s' "BurntSushi/ripgrep" ;;
         mlr) printf '%s' "johnkerl/miller" ;;
         opencode) printf '%s' "anomalyco/opencode" ;;
+        granted) printf '%s' "fwdcloudsec/granted" ;;
+        saml2aws) printf '%s' "Versent/saml2aws" ;;
         oci) printf '%s' "oracle/oci-cli" ;;
     esac
 }

@@ -461,6 +461,44 @@ _mlr_release_asset() {
     esac
 }
 
+_granted_release_asset() {
+    local ver="$1" os="$2" arch="$3"
+    case "$os" in
+        linux)
+            case "$arch" in
+                amd64) printf 'granted_%s_linux_x86_64.tar.gz' "$ver" ;;
+                arm64) printf 'granted_%s_linux_arm64.tar.gz' "$ver" ;;
+            esac
+            ;;
+    esac
+}
+
+_saml2aws_release_asset() {
+    local ver="$1" os="$2" arch="$3"
+    case "$os" in
+        linux)
+            case "$arch" in
+                amd64) printf 'saml2aws_%s_linux_amd64.tar.gz' "$ver" ;;
+                arm64) printf 'saml2aws_%s_linux_arm64.tar.gz' "$ver" ;;
+            esac
+            ;;
+        darwin)
+            case "$arch" in
+                amd64) printf 'saml2aws_%s_darwin_amd64.tar.gz' "$ver" ;;
+                arm64) printf 'saml2aws_%s_darwin_arm64.tar.gz' "$ver" ;;
+            esac
+            ;;
+    esac
+}
+
+_saml2aws_checksums_asset() {
+    local ver="$1" os="$2"
+    case "$os" in
+        darwin) printf 'saml2aws_%s_darwin_checksums.txt' "$ver" ;;
+        linux) printf 'saml2aws_%s_checksums.txt' "$ver" ;;
+    esac
+}
+
 install_glow() {
     local provider=""
     _installer_start || return 1
@@ -694,6 +732,130 @@ install_mlr() {
     ver=$(get_installed_version mlr)
     manifest_record mlr release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/mlr"
     _finish_install mlr "$installed" "$ver"
+}
+
+install_granted() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider granted "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli granted brew
+        return $?
+    fi
+    TB_STATE=error
+    TB_DETAIL=""
+    local body latest installed asset tag asset_url checksum_url cktext expected tmp src assume_src ver
+    body=$(github_release_json fwdcloudsec/granted) || { TB_DETAIL="cannot determine latest version"; return 1; }
+    latest=$(github_version_from_json "$body") || { TB_DETAIL="cannot determine latest version"; return 1; }
+    installed=$(get_installed_version granted)
+    if [ -n "$installed" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        return 0
+    fi
+    asset=$(_granted_release_asset "$latest" "$TB_OS" "$TB_ARCH")
+    [ -n "$asset" ] || { TB_DETAIL="unsupported platform"; return 1; }
+    tag="v${latest}"
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    asset_url=$(github_asset_url fwdcloudsec/granted "$tag" "$asset" "$body")
+    checksum_url=$(github_asset_url fwdcloudsec/granted "$tag" "checksums.txt" "$body")
+    log_info "granted: downloading ${asset_url}"
+    if ! download_file "$checksum_url" "$tmp/checksums.txt"; then
+        TB_DETAIL="download failed (checksums)"
+        return 1
+    fi
+    cktext=$(<"$tmp/checksums.txt")
+    expected=$(checksum_for "$cktext" "$asset") || { TB_DETAIL="checksum entry not found for ${asset}"; return 1; }
+    if ! download_file "$asset_url" "$tmp/$asset"; then
+        TB_DETAIL="download failed"
+        return 1
+    fi
+    if ! verify_sha256 "$tmp/$asset" "$expected"; then
+        TB_DETAIL="checksum mismatch"
+        return 1
+    fi
+    if ! extract_archive "$tmp/$asset" "$tmp/x"; then
+        TB_DETAIL="extraction failed"
+        return 1
+    fi
+    src=$(_find_in_archive "$tmp/x" granted)
+    [ -n "$src" ] || { TB_DETAIL="binary not found in archive"; return 1; }
+    if ! atomic_install "$src" "$CLI_TOOLBOX_HOME/bin/granted"; then
+        TB_DETAIL="failed to place binary"
+        return 1
+    fi
+    assume_src=$(_find_in_archive "$tmp/x" assume)
+    if [ -n "$assume_src" ]; then
+        atomic_install "$assume_src" "$CLI_TOOLBOX_HOME/bin/assume" || true
+    fi
+    ver=$(get_installed_version granted)
+    manifest_record granted release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/granted"
+    _finish_install granted "$installed" "$ver"
+}
+
+install_saml2aws() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider saml2aws "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli saml2aws brew
+        return $?
+    fi
+    TB_STATE=error
+    TB_DETAIL=""
+    local body latest installed asset tag checksum_asset asset_url checksum_url cktext expected tmp src ver
+    body=$(github_release_json Versent/saml2aws) || { TB_DETAIL="cannot determine latest version"; return 1; }
+    latest=$(github_version_from_json "$body") || { TB_DETAIL="cannot determine latest version"; return 1; }
+    installed=$(get_installed_version saml2aws)
+    if [ -n "$installed" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        return 0
+    fi
+    asset=$(_saml2aws_release_asset "$latest" "$TB_OS" "$TB_ARCH")
+    [ -n "$asset" ] || { TB_DETAIL="unsupported platform"; return 1; }
+    checksum_asset=$(_saml2aws_checksums_asset "$latest" "$TB_OS")
+    [ -n "$checksum_asset" ] || { TB_DETAIL="unsupported platform"; return 1; }
+    tag="v${latest}"
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    asset_url=$(github_asset_url Versent/saml2aws "$tag" "$asset" "$body")
+    checksum_url=$(github_asset_url Versent/saml2aws "$tag" "$checksum_asset" "$body")
+    log_info "saml2aws: downloading ${asset_url}"
+    if ! download_file "$checksum_url" "$tmp/checksums.txt"; then
+        TB_DETAIL="download failed (checksums)"
+        return 1
+    fi
+    cktext=$(<"$tmp/checksums.txt")
+    expected=$(checksum_for "$cktext" "$asset") || { TB_DETAIL="checksum entry not found for ${asset}"; return 1; }
+    if ! download_file "$asset_url" "$tmp/$asset"; then
+        TB_DETAIL="download failed"
+        return 1
+    fi
+    if ! verify_sha256 "$tmp/$asset" "$expected"; then
+        TB_DETAIL="checksum mismatch"
+        return 1
+    fi
+    if ! extract_archive "$tmp/$asset" "$tmp/x"; then
+        TB_DETAIL="extraction failed"
+        return 1
+    fi
+    src=$(_find_in_archive "$tmp/x" saml2aws "${asset%.tar.gz}")
+    [ -n "$src" ] || { TB_DETAIL="binary not found in archive"; return 1; }
+    if ! atomic_install "$src" "$CLI_TOOLBOX_HOME/bin/saml2aws"; then
+        TB_DETAIL="failed to place binary"
+        return 1
+    fi
+    ver=$(get_installed_version saml2aws)
+    manifest_record saml2aws release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/saml2aws"
+    _finish_install saml2aws "$installed" "$ver"
 }
 
 _kubectl_platform() {
@@ -1371,12 +1533,23 @@ run_uninstaller() {
         tccli) _delete_tccli ;;
         gh | az | terraform) _delete_package_cli "$name" ;;
         gcloud) _delete_gcloud ;;
-        glow | rg | mlr | opencode)
+        glow | rg | mlr | opencode | saml2aws)
             provider=$(resolve_provider "$name" "${TB_OS:-linux}")
             if [ "$provider" = "brew" ]; then
                 _delete_package_cli "$name"
             else
                 _delete_release_binary "$name"
+            fi
+            ;;
+        granted)
+            provider=$(resolve_provider granted "${TB_OS:-linux}")
+            if [ "$provider" = "brew" ]; then
+                _delete_package_cli granted
+            else
+                _delete_release_binary granted
+                if [ -e "$CLI_TOOLBOX_HOME/bin/assume" ] || [ -L "$CLI_TOOLBOX_HOME/bin/assume" ]; then
+                    _remove_bin_link assume
+                fi
             fi
             ;;
         coscli | kubectl | helm) _delete_release_binary "$name" ;;
@@ -1423,6 +1596,8 @@ run_installer() {
         coscli) install_coscli ;;
         rg) install_rg ;;
         mlr) install_mlr ;;
+        granted) install_granted ;;
+        saml2aws) install_saml2aws ;;
         kubectl) install_kubectl ;;
         helm) install_helm ;;
         oci) install_oci ;;

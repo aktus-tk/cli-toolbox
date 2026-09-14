@@ -110,6 +110,43 @@ make_rg_fixture() {
 EOF
 }
 
+make_granted_fixture() {
+    local base="$1" ver="$2" root asset
+    asset="granted_${ver}_linux_x86_64.tar.gz"
+    root="$base/assets/root"
+    mkdir -p "$root"
+    make_bin "$root/granted" "echo \"Granted version: ${ver}\""
+    make_tarball "$root" "$base/assets/$asset" granted
+    local hash
+    hash=$(sha256sum "$base/assets/$asset" | awk '{print $1}')
+    printf '%s  %s\n' "$hash" "$asset" >"$base/assets/checksums.txt"
+    mkdir -p "$base/api/repos/fwdcloudsec/granted/releases"
+    cat >"$base/api/repos/fwdcloudsec/granted/releases/latest" <<EOF
+{"tag_name": "v${ver}", "assets": [
+ {"name": "$asset", "browser_download_url": "file://$base/assets/$asset"},
+ {"name": "checksums.txt", "browser_download_url": "file://$base/assets/checksums.txt"}]}
+EOF
+}
+
+make_saml2aws_fixture() {
+    local base="$1" ver="$2" root asset checksum_asset
+    asset="saml2aws_${ver}_linux_amd64.tar.gz"
+    checksum_asset="saml2aws_${ver}_checksums.txt"
+    root="$base/assets/root"
+    mkdir -p "$root"
+    make_bin "$root/saml2aws" "echo \"${ver}\""
+    make_tarball "$root" "$base/assets/$asset" saml2aws
+    local hash
+    hash=$(sha256sum "$base/assets/$asset" | awk '{print $1}')
+    printf '%s  %s\n' "$hash" "$asset" >"$base/assets/$checksum_asset"
+    mkdir -p "$base/api/repos/Versent/saml2aws/releases"
+    cat >"$base/api/repos/Versent/saml2aws/releases/latest" <<EOF
+{"tag_name": "v${ver}", "assets": [
+ {"name": "$asset", "browser_download_url": "file://$base/assets/$asset"},
+ {"name": "$checksum_asset", "browser_download_url": "file://$base/assets/$checksum_asset"}]}
+EOF
+}
+
 make_mlr_fixture() {
     local base="$1" ver="$2" root asset dir
     asset="miller-${ver}-linux-amd64.tar.gz"
@@ -421,6 +458,8 @@ FIX_GLOW=$(test_tmp); make_glow_fixture "$FIX_GLOW" 3.0.0
 FIX_COSCLI=$(test_tmp); make_coscli_fixture "$FIX_COSCLI" 1.0.9
 FIX_RG=$(test_tmp); make_rg_fixture "$FIX_RG" 15.0.0
 FIX_MLR=$(test_tmp); make_mlr_fixture "$FIX_MLR" 6.20.0
+FIX_GRANTED=$(test_tmp); make_granted_fixture "$FIX_GRANTED" 0.39.0
+FIX_SAML2AWS=$(test_tmp); make_saml2aws_fixture "$FIX_SAML2AWS" 2.36.19
 FIX_GCLOUD=$(test_tmp); make_gcloud_fixture "$FIX_GCLOUD" 502.0.0
 FIX_UV_REL=$(test_tmp); make_uv_release_fixture "$FIX_UV_REL" 0.12.12
 FIX_UV_INST=$(test_tmp); make_uv_installer_fixture "$FIX_UV_INST" 0.12.12
@@ -900,6 +939,22 @@ export CLI_TOOLBOX_API_BASE="file://$FIX_MLR/api"
 cli "$OUT" install mlr
 assert_contains_re "mlr install" "$(cat "$OUT")" 'mlr[[:space:]]+installed'
 assert_true "mlr binary exists" test -x "$H/bin/mlr"
+
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+export CLI_TOOLBOX_API_BASE="file://$FIX_GRANTED/api"
+cli "$OUT" install granted
+assert_contains_re "granted install" "$(cat "$OUT")" 'granted[[:space:]]+installed'
+assert_true "granted binary exists" test -x "$H/bin/granted"
+
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+export CLI_TOOLBOX_API_BASE="file://$FIX_SAML2AWS/api"
+cli "$OUT" install saml2aws
+assert_contains_re "saml2aws install" "$(cat "$OUT")" 'saml2aws[[:space:]]+installed'
+assert_true "saml2aws binary exists" test -x "$H/bin/saml2aws"
 
 # ---------------------------------------------------------------------------
 # kubectl / helm release-binary
