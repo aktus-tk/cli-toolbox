@@ -245,7 +245,7 @@ az coscli granted saml2aws oci kubectl helm opencode agent codebuddy claude code
 | `terraform` | apt (HashiCorp) | brew (`hashicorp/tap`) |
 | `kubectl` | release-binary | release-binary |
 | `helm` | release-binary | release-binary |
-| `oci` | official-installer | brew（未導入時は official-installer） |
+| `oci` | uv-tool | brew（未導入時は uv-tool） |
 | `glow` | release-binary | brew（未導入時は release-binary） |
 | `coscli` | release-binary | release-binary |
 | `rg` | release-binary | brew（未導入時は release-binary） |

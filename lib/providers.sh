@@ -91,11 +91,11 @@ resolve_provider() {
                     if has_brew; then
                         printf '%s' "brew"
                     else
-                        printf '%s' "official-installer"
+                        printf '%s' "uv-tool"
                     fi
                     ;;
                 linux)
-                    printf '%s' "official-installer"
+                    printf '%s' "uv-tool"
                     ;;
                 *) printf '%s' "unknown" ;;
             esac
@@ -140,6 +140,7 @@ cli_apt_package() {
 cli_uv_tool_package() {
     case "$1" in
         tccli) printf '%s' "tccli" ;;
+        oci) printf '%s' "oci-cli" ;;
     esac
 }
 
@@ -245,7 +246,7 @@ cli_is_toolbox_managed() {
             [ -e "$CLI_TOOLBOX_HOME/bin/aws" ] || [ -L "$CLI_TOOLBOX_HOME/bin/aws" ] \
                 || [ -d "$CLI_TOOLBOX_HOME/tools/aws-cli" ]
             ;;
-        tccli)
+        tccli | oci)
             path=$(uv_tool_executable_path "$cli" 2>/dev/null) || path=""
             [ -n "$path" ] && path_is_uv_tool_managed "$path" "$cli"
             ;;
@@ -667,7 +668,7 @@ list_latest_version() {
                 pkg=$(cli_package_name oci brew)
                 ver=$(package_latest_version brew "$pkg" 2>/dev/null)
             else
-                ver=$(official_installer_latest_version oci 2>/dev/null) || ver=""
+                ver=$(get_latest_version_pypi oci-cli 2>/dev/null) || ver=""
             fi
             ;;
         kubectl)

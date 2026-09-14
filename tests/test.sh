@@ -190,30 +190,6 @@ make_helm_fixture() {
     printf 'v%s\n' "$ver" >"$base/helm-latest-version"
 }
 
-make_oci_installer_fixture() {
-    local base="$1" ver="$2"
-    mkdir -p "$base"
-    cat >"$base/install.sh" <<EOF
-#!/bin/sh
-install_dir=""
-exec_dir=""
-while [ \$# -gt 0 ]; do
-  case "\$1" in
-    --install-dir) install_dir="\$2"; shift 2 ;;
-    --exec-dir) exec_dir="\$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-mkdir -p "\$install_dir" "\$exec_dir"
-cat > "\$exec_dir/oci" <<'BIN'
-#!/bin/sh
-echo "${ver}"
-BIN
-chmod +x "\$exec_dir/oci"
-EOF
-    chmod +x "$base/install.sh"
-}
-
 make_coscli_fixture() {
     local base="$1" ver="$2" root
     root="$base/assets/root"
@@ -265,20 +241,63 @@ case "\$1" in
   tool)
     case "\$2" in
       list)
-        if [ "\$3" = "--show-paths" ] && [ -f "\$TOOL_STATE/tccli" ]; then
-          echo "tccli v3.1.165.1 (\$TOOL_BIN/tccli)"
-          echo "- tccli (\$TOOL_BIN/tccli)"
-        elif [ -f "\$TOOL_STATE/tccli" ]; then
+        if [ "\$3" = "--show-paths" ]; then
+          if [ -f "\$TOOL_STATE/tccli" ]; then
+            echo "tccli v3.1.165.1 (\$TOOL_BIN/tccli)"
+            echo "- tccli (\$TOOL_BIN/tccli)"
+          fi
+          if [ -f "\$TOOL_STATE/oci-cli" ]; then
+            echo "oci-cli v3.50.0 (\$TOOL_BIN/oci)"
+            echo "- oci (\$TOOL_BIN/oci)"
+          fi
+          exit 0
+        fi
+        if [ -f "\$TOOL_STATE/tccli" ]; then
           echo "tccli v3.1.165.1"
           echo "- tccli"
+        fi
+        if [ -f "\$TOOL_STATE/oci-cli" ]; then
+          echo "oci-cli v3.50.0"
+          echo "- oci"
         fi
         exit 0
         ;;
       install)
+        pkg=""
+        shift 2
+        while [ \$# -gt 0 ]; do
+          case "\$1" in
+            --upgrade|--force) shift ;;
+            *) pkg="\$1"; shift ;;
+          esac
+        done
         mkdir -p "\$TOOL_BIN" "\$TOOL_STATE"
-        printf '%s\n' '#!/bin/sh' 'echo 3.1.165.1' > "\$TOOL_BIN/tccli"
-        chmod +x "\$TOOL_BIN/tccli"
-        touch "\$TOOL_STATE/tccli"
+        case "\$pkg" in
+          tccli)
+            printf '%s\n' '#!/bin/sh' 'echo 3.1.165.1' > "\$TOOL_BIN/tccli"
+            chmod +x "\$TOOL_BIN/tccli"
+            touch "\$TOOL_STATE/tccli"
+            ;;
+          oci-cli)
+            printf '%s\n' '#!/bin/sh' 'echo 3.50.0' > "\$TOOL_BIN/oci"
+            chmod +x "\$TOOL_BIN/oci"
+            touch "\$TOOL_STATE/oci-cli"
+            ;;
+        esac
+        exit 0
+        ;;
+      uninstall)
+        pkg=""
+        shift 2
+        while [ \$# -gt 0 ]; do
+          case "\$1" in
+            *) pkg="\$1"; shift ;;
+          esac
+        done
+        case "\$pkg" in
+          tccli) rm -f "\$TOOL_BIN/tccli" "\$TOOL_STATE/tccli" ;;
+          oci-cli) rm -f "\$TOOL_BIN/oci" "\$TOOL_STATE/oci-cli" ;;
+        esac
         exit 0
         ;;
     esac
@@ -464,6 +483,7 @@ FIX_GCLOUD=$(test_tmp); make_gcloud_fixture "$FIX_GCLOUD" 502.0.0
 FIX_UV_REL=$(test_tmp); make_uv_release_fixture "$FIX_UV_REL" 0.12.12
 FIX_UV_INST=$(test_tmp); make_uv_installer_fixture "$FIX_UV_INST" 0.12.12
 FIX_PYPI=$(test_tmp); make_pypi_fixture "$FIX_PYPI" tccli 3.1.165.1
+make_pypi_fixture "$FIX_PYPI" oci-cli 3.50.0
 FIX_AWS=$(test_tmp); make_aws_fixture "$FIX_AWS" 2.36.42
 FIX_OPENCODE=$(test_tmp); make_opencode_fixture "$FIX_OPENCODE" 1.0.0
 FIX_AGENT=$(test_tmp); make_agent_installer_fixture "$FIX_AGENT" 1.0.0
@@ -472,8 +492,6 @@ FIX_CODEX=$(test_tmp); make_codex_installer_fixture "$FIX_CODEX" 2.0.0
 FIX_AGY=$(test_tmp); make_agy_installer_fixture "$FIX_AGY" 1.2.1
 FIX_KUBECTL=$(test_tmp); make_kubectl_fixture "$FIX_KUBECTL" 1.30.0
 FIX_HELM=$(test_tmp); make_helm_fixture "$FIX_HELM" 3.14.0
-FIX_OCI=$(test_tmp); make_oci_installer_fixture "$FIX_OCI" 3.50.0
-
 new_home() { test_tmp; }
 
 setup_clean_env() {
@@ -637,7 +655,7 @@ assert_contains "resolve_provider terraform linux apt" "$PROV_OUT" "apt"
 assert_contains "resolve_provider terraform darwin brew" "$PROV_OUT" "brew"
 assert_contains "resolve_provider kubectl release-binary" "$PROV_OUT" "release-binary"
 assert_contains "resolve_provider helm release-binary" "$PROV_OUT" "release-binary"
-assert_contains "resolve_provider oci linux official-installer" "$PROV_OUT" "official-installer"
+assert_contains "resolve_provider oci linux uv-tool" "$PROV_OUT" "uv-tool"
 
 OCI_DARWIN_PROV=$(
     source_libs
@@ -1010,13 +1028,12 @@ assert_contains "helm version" "$HELM_OUT" "ver=3.14.0"
 
 OCI_OUT=$(
     H=$(new_home)
-    export CLI_TOOLBOX_HOME="$H"
+    setup_clean_env "$H"
     export TB_OS=linux TB_ARCH=amd64
-    export CLI_TOOLBOX_OCI_INSTALL_URL="file://$FIX_OCI/install.sh"
     source_libs
-    official_installer_latest_version() { printf '%s\n' "3.50.0"; }
+    install_uv >/dev/null 2>&1
     install_oci
-    printf 'state=%s ver=%s bin=%s\n' "$TB_STATE" "$(get_installed_version oci)" "$([ -x "$H/bin/oci" ] && echo yes || echo no)"
+    printf 'state=%s ver=%s bin=%s\n' "$TB_STATE" "$(get_installed_version oci)" "$([ -x "$H/.local/bin/oci" ] && echo yes || echo no)"
 )
 assert_contains "oci installs" "$OCI_OUT" "state=installed"
 assert_contains "oci version" "$OCI_OUT" "ver=3.50.0"

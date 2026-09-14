@@ -1018,54 +1018,56 @@ install_oci() {
     fi
     TB_STATE=error
     TB_DETAIL=""
-    local installed latest url tmp ver path
-    installed=$(get_installed_version oci)
-    latest=$(official_installer_latest_version oci 2>/dev/null) || latest=""
+    if ! _ensure_uv_on_path; then
+        TB_DETAIL="uv is required for oci (install uv first)"
+        return 1
+    fi
+    local latest installed ver uv="" tool_bin="" uv_path="" pkg=""
+    pkg=$(cli_uv_tool_package oci)
+    latest=$(get_latest_version_pypi "$pkg" 2>/dev/null) || latest=""
+    installed=""
+    uv_path=$(uv_tool_executable_path oci 2>/dev/null) || uv_path=""
+    if [ -n "$uv_path" ]; then
+        installed=$(_parse_version oci "$uv_path")
+    fi
     if [ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" = "$latest" ]; then
         TB_STATE=unchanged
         TB_DETAIL="$installed"
-        path=$(resolve_path oci) || path=""
-        [ -n "$path" ] && manifest_record oci official-installer "$installed" "$path"
+        manifest_record oci uv-tool "$installed" "$uv_path"
         return 0
     fi
-    url=$(official_installer_url oci)
-    if ! make_tempdir; then
-        TB_DETAIL="cannot create temp directory"
+    uv=$(uv_bin)
+    tool_bin=$(uv_tool_bin_dir)
+    mkdir -p "$tool_bin"
+    _ensure_path_prefix "$tool_bin"
+    if uv_tool_has "$pkg"; then
+        UV_TOOL_BIN_DIR="$tool_bin" "$uv" tool uninstall "$pkg" >/dev/null 2>&1 || true
+    fi
+    rm -f "$CLI_TOOLBOX_HOME/bin/oci"
+    rm -rf "$CLI_TOOLBOX_HOME/tools/oci-cli"
+    log_info "oci: uv tool install --upgrade ${pkg} (bin dir: ${tool_bin})"
+    if ! UV_TOOL_BIN_DIR="$tool_bin" "$uv" tool install --upgrade --force "$pkg" >/dev/null 2>&1; then
+        TB_DETAIL="uv tool install failed for oci"
         return 1
     fi
-    tmp="$TB_TMPDIR"
-    log_info "oci: downloading installer ${url}"
-    if ! download_file "$url" "$tmp/install.sh"; then
-        TB_DETAIL="download failed (installer)"
+    if ! uv_tool_has "$pkg"; then
+        TB_DETAIL="uv tool install failed for oci"
         return 1
     fi
-    chmod +x "$tmp/install.sh"
-    mkdir -p "$CLI_TOOLBOX_HOME/bin" "$CLI_TOOLBOX_HOME/tools/oci-cli"
-    log_info "oci: running official installer (--install-dir ${CLI_TOOLBOX_HOME}/tools/oci-cli --exec-dir ${CLI_TOOLBOX_HOME}/bin)"
-    _snapshot_shell_rc_state "$tmp/rc-snap"
-    if ! "$tmp/install.sh" --accept-all-defaults --no-tty \
-        --install-dir "$CLI_TOOLBOX_HOME/tools/oci-cli" \
-        --exec-dir "$CLI_TOOLBOX_HOME/bin" \
-        --script-dir "$CLI_TOOLBOX_HOME/tools/oci-cli/scripts" >/dev/null 2>&1; then
-        _restore_shell_rc_state "$tmp/rc-snap"
-        TB_DETAIL="official installer failed"
-        return 1
+    ver=""
+    uv_path=$(uv_tool_executable_path oci 2>/dev/null) || uv_path=""
+    if [ -n "$uv_path" ]; then
+        ver=$(_parse_version oci "$uv_path")
     fi
-    _restore_shell_rc_state "$tmp/rc-snap"
-    path="$CLI_TOOLBOX_HOME/bin/oci"
-    if [ ! -x "$path" ]; then
-        path=$(resolve_path oci) || path=""
-    fi
-    if [ -z "$path" ]; then
-        TB_DETAIL="installed but binary not found on PATH"
-        return 1
-    fi
-    ver=$(_parse_version oci "$path")
     if [ -z "$ver" ]; then
         TB_DETAIL="installed but version check failed"
         return 1
     fi
-    manifest_record oci official-installer "$ver" "$path"
+    if [ -n "$latest" ] && [ "$ver" != "$latest" ] && version_gt "$latest" "$ver"; then
+        TB_DETAIL="still ${ver} after install (latest ${latest})"
+        return 1
+    fi
+    manifest_record oci uv-tool "$ver" "${uv_path:-$tool_bin/oci}"
     _finish_install oci "$installed" "$ver"
 }
 
@@ -1439,7 +1441,7 @@ _delete_gcloud() {
 }
 
 _delete_oci() {
-    local provider=""
+    local provider="" uv="" tool_bin="" pkg="" exe=""
     TB_STATE=error
     TB_DETAIL=""
     if ! cli_is_toolbox_managed oci; then
@@ -1455,11 +1457,20 @@ _delete_oci() {
         _delete_package_cli oci
         return $?
     fi
+    pkg=$(cli_uv_tool_package oci)
+    tool_bin=$(uv_tool_bin_dir)
+    if uv=$(uv_bin); then
+        UV_TOOL_BIN_DIR="$tool_bin" "$uv" tool uninstall "$pkg" >/dev/null 2>&1 || true
+    fi
+    exe="$tool_bin/oci"
+    if [ -e "$exe" ] || [ -L "$exe" ]; then
+        rm -f "$exe"
+    fi
     rm -f "$CLI_TOOLBOX_HOME/bin/oci"
     rm -rf "$CLI_TOOLBOX_HOME/tools/oci-cli"
     manifest_remove oci
     TB_STATE=deleted
-    TB_DETAIL="removed oci-cli"
+    TB_DETAIL="removed uv-tool install"
     return 0
 }
 
