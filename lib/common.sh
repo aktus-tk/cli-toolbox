@@ -139,7 +139,7 @@ _parse_version() {
             out=$("$path" --version 2>/dev/null | sed -n 's/^Granted version: \([0-9][^ ]*\).*/\1/p' | head -1)
             ;;
         saml2aws)
-            out=$("$path" --version 2>/dev/null | sed -n '1s/^\([0-9][^ ]*\).*/\1/p')
+            out=$("$path" --version 2>&1 | sed -n '1s/^\([0-9][^ ]*\).*/\1/p' | head -1)
             ;;
         opencode)
             out=$("$path" --version 2>/dev/null | sed -n 's/^opencode version \([0-9][^ ]*\).*/\1/p' | head -1)
@@ -167,6 +167,9 @@ _parse_version() {
             ;;
         codex)
             out=$("$path" --version 2>/dev/null | sed -n 's/^codex version \([0-9][^ ]*\).*/\1/p' | head -1)
+            if [ -z "$out" ]; then
+                out=$("$path" --version 2>/dev/null | sed -n 's/^codex-cli \([0-9][^ ]*\).*/\1/p' | head -1)
+            fi
             if [ -z "$out" ]; then
                 out=$("$path" --version 2>/dev/null | sed -n 's/^\([0-9][^ ]*\).*/\1/p' | head -1)
             fi
@@ -324,6 +327,60 @@ github_asset_url() {
     fi
     printf '%s\n' "$url"
     return 0
+}
+
+# github_api_asset_url <asset-name> <body>
+# Returns the api.github.com/releases/assets/<id> URL when present in release JSON.
+github_api_asset_url() {
+    local name="$1" body="$2" url=""
+    if [ -n "$body" ]; then
+        url=$(printf '%s\n' "$body" \
+            | grep -o '"[^"]*"[[:space:]]*:[[:space:]]*"[^"]*"' \
+            | awk -v want="$name" '
+                /"name"[[:space:]]*:[[:space:]]*"/ {
+                    k = $0
+                    sub(/^.*"name"[[:space:]]*:[[:space:]]*"/, "", k)
+                    sub(/"[[:space:]]*$/, "", k)
+                    if (k == want) { seen = 1; next }
+                }
+                seen && /^"url"[[:space:]]*:[[:space:]]*"/ {
+                    sub(/^.*"url"[[:space:]]*:[[:space:]]*"/, "", $0)
+                    sub(/"[[:space:]]*$/, "", $0)
+                    print
+                    exit
+                }
+            ')
+    fi
+    [ -n "$url" ] && printf '%s\n' "$url"
+}
+
+download_github_api_asset() {
+    local url="$1" dest="$2"
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        "${CLI_TOOLBOX_CURL:-curl}" -fL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            --retry 3 --connect-timeout 10 -o "$dest" "$url" 2>/dev/null
+    else
+        "${CLI_TOOLBOX_CURL:-curl}" -fL -H "Accept: application/octet-stream" \
+            --retry 3 --connect-timeout 10 -o "$dest" "$url" 2>/dev/null
+    fi
+}
+
+# download_github_release_asset <owner/repo> <tag> <asset-name> <body> <dest>
+# Tries browser_download_url first; on failure retries via the GitHub API asset URL
+# (some release assets intermittently return 5xx on the browser CDN).
+download_github_release_asset() {
+    local repo="$1" tag="$2" name="$3" body="$4" dest="$5"
+    local browser_url="" api_url=""
+    browser_url=$(github_asset_url "$repo" "$tag" "$name" "$body")
+    api_url=$(github_api_asset_url "$name" "$body") || api_url=""
+    if download_file "$browser_url" "$dest"; then
+        return 0
+    fi
+    if [ -n "$api_url" ] && download_github_api_asset "$api_url" "$dest"; then
+        return 0
+    fi
+    return 1
 }
 
 # ---------------------------------------------------------------------------

@@ -696,6 +696,30 @@ AGENT_VER=$(
 )
 assert_contains "agent version parse (prefixed)" "$AGENT_VER" "1.0.0"
 
+CODEX_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/codex" 'echo "codex version 2.0.0"'
+    source_libs
+    _parse_version codex "$H/bin/codex"
+)
+assert_contains "codex version parse (legacy)" "$CODEX_VER" "2.0.0"
+
+CODEX_CLI_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/codex" 'echo "codex-cli 0.154.0"'
+    source_libs
+    _parse_version codex "$H/bin/codex"
+)
+assert_contains "codex version parse (codex-cli)" "$CODEX_CLI_VER" "0.154.0"
+
+SAML2AWS_VER=$(
+    H=$(new_home)
+    make_bin "$H/bin/saml2aws" 'echo "2.36.19" >&2'
+    source_libs
+    _parse_version saml2aws "$H/bin/saml2aws"
+)
+assert_contains "saml2aws version parse (stderr)" "$SAML2AWS_VER" "2.36.19"
+
 AGENT_CAL_VER=$(
     H=$(new_home)
     make_bin "$H/bin/agent" 'echo "2026.09.10-fd3934a"'
@@ -735,6 +759,17 @@ GCURL_OUT=$(
 )
 assert_contains "gcloud_archive_url linux amd64" "$GCURL_OUT" "linux-x86_64"
 assert_contains "gcloud_archive_url darwin arm64" "$GCURL_OUT" "darwin-arm"
+
+GH_API_FALLBACK=$(
+    H=$(new_home)
+    mkdir -p "$H/assets"
+    printf 'fallback-ok' >"$H/assets/asset.txt"
+    body='{"assets":[{"name":"asset.txt","browser_download_url":"file:///nonexistent/asset.txt","url":"file://'"$H"'/assets/asset.txt"}]}'
+    source_libs
+    dest="$H/out.txt"
+    download_github_release_asset test/repo v1.0.0 asset.txt "$body" "$dest" && cat "$dest"
+)
+assert_contains "download_github_release_asset api fallback" "$GH_API_FALLBACK" "fallback-ok"
 
 # ---------------------------------------------------------------------------
 # list: pipx absent, PROVIDER column, targets rows, az requires-root/missing

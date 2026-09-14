@@ -807,7 +807,7 @@ install_saml2aws() {
     fi
     TB_STATE=error
     TB_DETAIL=""
-    local body latest installed asset tag checksum_asset asset_url checksum_url cktext expected tmp src ver
+    local body latest installed asset tag checksum_asset asset_url cktext expected tmp src ver
     body=$(github_release_json Versent/saml2aws) || { TB_DETAIL="cannot determine latest version"; return 1; }
     latest=$(github_version_from_json "$body") || { TB_DETAIL="cannot determine latest version"; return 1; }
     installed=$(get_installed_version saml2aws)
@@ -827,15 +827,14 @@ install_saml2aws() {
     fi
     tmp="$TB_TMPDIR"
     asset_url=$(github_asset_url Versent/saml2aws "$tag" "$asset" "$body")
-    checksum_url=$(github_asset_url Versent/saml2aws "$tag" "$checksum_asset" "$body")
     log_info "saml2aws: downloading ${asset_url}"
-    if ! download_file "$checksum_url" "$tmp/checksums.txt"; then
+    if ! download_github_release_asset Versent/saml2aws "$tag" "$checksum_asset" "$body" "$tmp/checksums.txt"; then
         TB_DETAIL="download failed (checksums)"
         return 1
     fi
     cktext=$(<"$tmp/checksums.txt")
     expected=$(checksum_for "$cktext" "$asset") || { TB_DETAIL="checksum entry not found for ${asset}"; return 1; }
-    if ! download_file "$asset_url" "$tmp/$asset"; then
+    if ! download_github_release_asset Versent/saml2aws "$tag" "$asset" "$body" "$tmp/$asset"; then
         TB_DETAIL="download failed"
         return 1
     fi
