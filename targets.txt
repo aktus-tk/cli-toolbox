@@ -17,6 +17,7 @@ terraform
 # oci
 # kubectl
 # helm
+# herdr
 
 # AI agents (optional)
 # opencode

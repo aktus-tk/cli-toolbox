@@ -20,6 +20,7 @@ cli_package_name() {
                 mlr) printf '%s' "miller" ;;
                 opencode) printf '%s' "opencode" ;;
                 granted) printf '%s' "granted" ;;
+                herdr) printf '%s' "herdr" ;;
                 saml2aws) printf '%s' "saml2aws" ;;
                 codebuddy) printf '%s' "codebuddy-code" ;;
                 terraform) printf '%s' "terraform" ;;

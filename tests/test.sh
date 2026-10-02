@@ -166,6 +166,20 @@ make_mlr_fixture() {
 EOF
 }
 
+make_herdr_fixture() {
+    local base="$1" ver="$2" asset
+    asset="herdr-linux-x86_64"
+    mkdir -p "$base/assets"
+    make_bin "$base/assets/$asset" "echo \"herdr ${ver}\""
+    local hash
+    hash=$(sha256sum "$base/assets/$asset" | awk '{print $1}')
+    mkdir -p "$base/api/repos/herdrdev/herdr/releases"
+    cat >"$base/api/repos/herdrdev/herdr/releases/latest" <<EOF
+{"tag_name": "v${ver}", "assets": [
+ {"name": "$asset", "browser_download_url": "file://$base/assets/$asset", "digest": "sha256:${hash}"}]}
+EOF
+}
+
 make_kubectl_fixture() {
     local base="$1" ver="$2"
     mkdir -p "$base/release/v${ver}/bin/linux/amd64"
@@ -490,6 +504,7 @@ FIX_AGENT=$(test_tmp); make_agent_installer_fixture "$FIX_AGENT" 1.0.0
 FIX_CLAUDE=$(test_tmp); make_claude_installer_fixture "$FIX_CLAUDE" 3.0.0
 FIX_CODEX=$(test_tmp); make_codex_installer_fixture "$FIX_CODEX" 2.0.0
 FIX_AGY=$(test_tmp); make_agy_installer_fixture "$FIX_AGY" 1.2.1
+FIX_HERDR=$(test_tmp); make_herdr_fixture "$FIX_HERDR" 0.9.3
 FIX_KUBECTL=$(test_tmp); make_kubectl_fixture "$FIX_KUBECTL" 1.30.0
 FIX_HELM=$(test_tmp); make_helm_fixture "$FIX_HELM" 3.14.0
 new_home() { test_tmp; }
@@ -1008,6 +1023,14 @@ export CLI_TOOLBOX_API_BASE="file://$FIX_SAML2AWS/api"
 cli "$OUT" install saml2aws
 assert_contains_re "saml2aws install" "$(cat "$OUT")" 'saml2aws[[:space:]]+installed'
 assert_true "saml2aws binary exists" test -x "$H/bin/saml2aws"
+
+OUT=$(test_file)
+H=$(new_home)
+setup_clean_env "$H"
+export CLI_TOOLBOX_API_BASE="file://$FIX_HERDR/api"
+cli "$OUT" install herdr
+assert_contains_re "herdr install" "$(cat "$OUT")" 'herdr[[:space:]]+installed'
+assert_true "herdr binary exists" test -x "$H/bin/herdr"
 
 # ---------------------------------------------------------------------------
 # kubectl / helm release-binary

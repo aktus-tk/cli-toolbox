@@ -181,6 +181,9 @@ _parse_version() {
             out=$("$path" version --client 2>/dev/null \
                 | sed -n 's/.*Client Version: v\?\([0-9][^ ]*\).*/\1/p' | head -1)
             ;;
+        herdr)
+            out=$("$path" --version 2>/dev/null | sed -n 's/^herdr \([0-9][^ ]*\).*/\1/p' | head -1)
+            ;;
         helm)
             out=$("$path" version --short 2>/dev/null | sed -n 's/^v\?\([0-9][^ ]*\).*/\1/p' | head -1)
             if [ -z "$out" ]; then
@@ -326,6 +329,36 @@ github_asset_url() {
         url="https://github.com/${repo}/releases/download/${tag}/${name}"
     fi
     printf '%s\n' "$url"
+    return 0
+}
+
+# github_asset_digest <asset-name> <body>
+# Returns sha256 hex from the GitHub release asset digest field (sha256:...).
+github_asset_digest() {
+    local name="$1" body="$2" digest=""
+    if [ -n "$body" ]; then
+        digest=$(printf '%s\n' "$body" \
+            | grep -o '"[^"]*"[[:space:]]*:[[:space:]]*"[^"]*"' \
+            | awk -v want="$name" '
+                /"name"[[:space:]]*:[[:space:]]*"/ {
+                    k = $0
+                    sub(/^.*"name"[[:space:]]*:[[:space:]]*"/, "", k)
+                    sub(/"[[:space:]]*$/, "", k)
+                    if (k == want) { seen = 1; next }
+                }
+                seen && /"digest"[[:space:]]*:[[:space:]]*"/ {
+                    sub(/^.*"digest"[[:space:]]*:[[:space:]]*"/, "", $0)
+                    sub(/"[[:space:]]*$/, "", $0)
+                    print
+                    exit
+                }
+            ')
+    fi
+    if [ -z "$digest" ]; then
+        return 1
+    fi
+    digest=${digest#sha256:}
+    printf '%s\n' "$digest"
     return 0
 }
 

@@ -883,6 +883,67 @@ _helm_platform_suffix() {
     esac
 }
 
+_herdr_release_asset() {
+    local os="$1" arch="$2" os_name="" arch_name=""
+    case "$os" in
+        linux) os_name=linux ;;
+        darwin) os_name=macos ;;
+        *) return 1 ;;
+    esac
+    case "$arch" in
+        amd64) arch_name=x86_64 ;;
+        arm64) arch_name=aarch64 ;;
+        *) return 1 ;;
+    esac
+    printf 'herdr-%s-%s' "$os_name" "$arch_name"
+}
+
+install_herdr() {
+    local provider=""
+    _installer_start || return 1
+    provider=$(resolve_provider herdr "$TB_OS")
+    if [ "$provider" = "brew" ]; then
+        install_package_cli herdr brew
+        return $?
+    fi
+    TB_STATE=error
+    TB_DETAIL=""
+    local body latest installed asset tag asset_url expected tmp ver
+    body=$(github_release_json herdrdev/herdr) || { TB_DETAIL="cannot determine latest version"; return 1; }
+    latest=$(github_version_from_json "$body") || { TB_DETAIL="cannot determine latest version"; return 1; }
+    installed=$(get_installed_version herdr)
+    if [ -n "$installed" ] && [ "$installed" = "$latest" ]; then
+        TB_STATE=unchanged
+        TB_DETAIL="$installed"
+        return 0
+    fi
+    asset=$(_herdr_release_asset "$TB_OS" "$TB_ARCH") || { TB_DETAIL="unsupported platform"; return 1; }
+    tag="v${latest}"
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    asset_url=$(github_asset_url herdrdev/herdr "$tag" "$asset" "$body")
+    expected=$(github_asset_digest "$asset" "$body") || { TB_DETAIL="checksum digest not found for ${asset}"; return 1; }
+    log_info "herdr: downloading ${asset_url}"
+    if ! download_github_release_asset herdrdev/herdr "$tag" "$asset" "$body" "$tmp/$asset"; then
+        TB_DETAIL="download failed"
+        return 1
+    fi
+    if ! verify_sha256 "$tmp/$asset" "$expected"; then
+        TB_DETAIL="checksum mismatch"
+        return 1
+    fi
+    if ! atomic_install "$tmp/$asset" "$CLI_TOOLBOX_HOME/bin/herdr"; then
+        TB_DETAIL="failed to place binary"
+        return 1
+    fi
+    ver=$(get_installed_version herdr)
+    manifest_record herdr release-binary "$ver" "$CLI_TOOLBOX_HOME/bin/herdr"
+    _finish_install herdr "$installed" "$ver"
+}
+
 install_kubectl() {
     TB_STATE=error
     TB_DETAIL=""
@@ -1543,7 +1604,7 @@ run_uninstaller() {
         tccli) _delete_tccli ;;
         gh | az | terraform) _delete_package_cli "$name" ;;
         gcloud) _delete_gcloud ;;
-        glow | rg | mlr | opencode | saml2aws)
+        glow | rg | mlr | opencode | saml2aws | herdr)
             provider=$(resolve_provider "$name" "${TB_OS:-linux}")
             if [ "$provider" = "brew" ]; then
                 _delete_package_cli "$name"
@@ -1610,6 +1671,7 @@ run_installer() {
         saml2aws) install_saml2aws ;;
         kubectl) install_kubectl ;;
         helm) install_helm ;;
+        herdr) install_herdr ;;
         oci) install_oci ;;
         opencode) install_opencode ;;
         agent) install_agent ;;

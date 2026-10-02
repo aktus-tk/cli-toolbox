@@ -3,7 +3,7 @@
 # Requires lib/common.sh and lib/packages.sh to be sourced first.
 
 SUPPORTED_CLIS=(uv gh glow coscli rg mlr tccli aws gcloud granted saml2aws az terraform \
-    kubectl helm oci opencode agent codebuddy claude codex agy)
+    kubectl helm herdr oci opencode agent codebuddy claude codex agy)
 UNSUPPORTED_CLIS=()
 
 is_supported() {
@@ -84,6 +84,19 @@ resolve_provider() {
             ;;
         kubectl | helm)
             printf '%s' "release-binary"
+            ;;
+        herdr)
+            case "$os" in
+                darwin)
+                    if has_brew; then
+                        printf '%s' "brew"
+                    else
+                        printf '%s' "release-binary"
+                    fi
+                    ;;
+                linux) printf '%s' "release-binary" ;;
+                *) printf '%s' "unknown" ;;
+            esac
             ;;
         oci)
             case "$os" in
@@ -632,7 +645,7 @@ list_latest_version() {
     local name="$1" body ver="" pkg="" provider=""
     provider=$(cli_preferred_provider "$name")
     case "$name" in
-        glow | coscli | rg | mlr | opencode | granted | saml2aws)
+        glow | coscli | rg | mlr | opencode | granted | saml2aws | herdr)
             body=$(github_release_json "$(list_repo "$name")" 2>/dev/null) || body=""
             [ -n "$body" ] && ver=$(github_version_from_json "$body" 2>/dev/null)
             ;;
@@ -695,6 +708,7 @@ list_repo() {
         opencode) printf '%s' "anomalyco/opencode" ;;
         granted) printf '%s' "fwdcloudsec/granted" ;;
         saml2aws) printf '%s' "Versent/saml2aws" ;;
+        herdr) printf '%s' "herdrdev/herdr" ;;
         oci) printf '%s' "oracle/oci-cli" ;;
     esac
 }

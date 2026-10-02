@@ -181,6 +181,7 @@ terraform
 # oci
 # kubectl
 # helm
+# herdr
 
 # AI agents (optional)
 # opencode
@@ -197,7 +198,7 @@ terraform
 `SUPPORTED_CLIS` に含まれるが `targets.txt` に無い CLI（明示指定でインストール）:
 
 ```bash
-az coscli granted saml2aws oci kubectl helm opencode agent codebuddy claude codex agy
+az coscli granted saml2aws oci kubectl helm herdr opencode agent codebuddy claude codex agy
 ```
 
 ## CLI の説明（標準 / 任意）
@@ -223,6 +224,7 @@ az coscli granted saml2aws oci kubectl helm opencode agent codebuddy claude code
 | 標準 | IaC | `terraform` | IaC調査・変更・検証 |
 | 任意 | Kubernetes | `kubectl` | Kubernetes操作 |
 | 任意 | Kubernetes | `helm` | Kubernetesへのアプリ配布 |
+| 任意 | AI Agent | `herdr` | コーディングエージェント向けターミナルランタイム |
 | 任意 | AI Agent | `opencode` | AIエージェントCLI（OpenCode） |
 | 任意 | AI Agent | `agent` | AIエージェントCLI（Cursor Agent CLI） |
 | 任意 | AI Agent | `codebuddy` | AIエージェントCLI（CodeBuddy） |
@@ -245,6 +247,7 @@ az coscli granted saml2aws oci kubectl helm opencode agent codebuddy claude code
 | `terraform` | apt (HashiCorp) | brew (`hashicorp/tap`) |
 | `kubectl` | release-binary | release-binary |
 | `helm` | release-binary | release-binary |
+| `herdr` | release-binary | brew（未導入時は release-binary） |
 | `oci` | uv-tool | brew（未導入時は uv-tool） |
 | `glow` | release-binary | brew（未導入時は release-binary） |
 | `coscli` | release-binary | release-binary |
