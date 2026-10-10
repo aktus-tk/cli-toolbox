@@ -270,7 +270,7 @@ cli_is_toolbox_managed() {
 }
 
 get_installed_version() {
-    local cli="$1" path="" provider="" pkg=""
+    local cli="$1" provider="" pkg="" info="" mpath="" path=""
     provider=$(cli_preferred_provider "$cli")
     case "$provider" in
         uv-tool)
@@ -288,10 +288,73 @@ get_installed_version() {
             return 0
             ;;
     esac
-    if [ ! -e "$CLI_TOOLBOX_HOME/bin/$cli" ] && [ ! -L "$CLI_TOOLBOX_HOME/bin/$cli" ]; then
+    # agent is toolbox-isolated: the managed binary lives in
+    # $CLI_TOOLBOX_HOME/bin or the toolbox-local cursor-agent store.
+    # The real $HOME/.local/bin shim is only a legacy migration source.
+    case "$cli" in
+        agent)
+            if [ -x "$CLI_TOOLBOX_HOME/bin/agent" ] || [ -L "$CLI_TOOLBOX_HOME/bin/agent" ]; then
+                _parse_version agent "$CLI_TOOLBOX_HOME/bin/agent"
+                return 0
+            fi
+            if [ -n "${HOME:-}" ] && [ -n "$CLI_TOOLBOX_HOME" ] \
+                && { [ -x "$CLI_TOOLBOX_HOME/.local/bin/agent" ] || [ -L "$CLI_TOOLBOX_HOME/.local/bin/agent" ]; }; then
+                _parse_version agent "$CLI_TOOLBOX_HOME/.local/bin/agent"
+                return 0
+            fi
+            path=$(_agent_latest_toolbox_bin 2>/dev/null) || path=""
+            if [ -n "$path" ]; then
+                _parse_version agent "$path"
+                return 0
+            fi
+            info=$(manifest_lookup agent 2>/dev/null) || info=""
+            if [ -n "$info" ]; then
+                mpath=${info#*$'\t'}
+                mpath=${mpath#*$'\t'}
+                mpath=${mpath#*$'\t'}
+                if [ -n "$mpath" ] && { [ -x "$mpath" ] || [ -L "$mpath" ]; }; then
+                    _parse_version agent "$mpath"
+                    return 0
+                fi
+            fi
+            # Legacy: previous cli-toolbox releases ran the official
+            # installer with the real HOME, leaving $HOME/.local/bin/agent.
+            if [ -n "${HOME:-}" ] && [ "$HOME/.local/bin/agent" != "$CLI_TOOLBOX_HOME/.local/bin/agent" ] \
+                && { [ -x "$HOME/.local/bin/agent" ] || [ -L "$HOME/.local/bin/agent" ]; }; then
+                _parse_version agent "$HOME/.local/bin/agent"
+                return 0
+            fi
+            return 0
+            ;;
+    esac
+    if [ -x "$CLI_TOOLBOX_HOME/bin/$cli" ] || [ -L "$CLI_TOOLBOX_HOME/bin/$cli" ]; then
+        _parse_version "$cli" "$CLI_TOOLBOX_HOME/bin/$cli"
         return 0
     fi
-    _parse_version "$cli" "$CLI_TOOLBOX_HOME/bin/$cli"
+    # Other official installers (claude/codebuddy/...) default to
+    # ~/.local/bin. Check there and the manifest record so existing installs
+    # are detected even when the toolbox link does not exist yet. Do NOT
+    # fall back to generic PATH here: that would pick up unrelated system
+    # binaries or stale entries from other homes and break idempotency.
+    case "$cli" in
+        claude | codebuddy | codex | agy)
+            if [ -n "${HOME:-}" ] && { [ -x "$HOME/.local/bin/$cli" ] || [ -L "$HOME/.local/bin/$cli" ]; }; then
+                _parse_version "$cli" "$HOME/.local/bin/$cli"
+                return 0
+            fi
+            ;;
+    esac
+    info=$(manifest_lookup "$cli" 2>/dev/null) || info=""
+    if [ -n "$info" ]; then
+        mpath=${info#*$'\t'}
+        mpath=${mpath#*$'\t'}
+        mpath=${mpath#*$'\t'}
+        if [ -n "$mpath" ] && { [ -x "$mpath" ] || [ -L "$mpath" ]; }; then
+            _parse_version "$cli" "$mpath"
+            return 0
+        fi
+    fi
+    return 0
 }
 
 path_is_pyenv_shim() {

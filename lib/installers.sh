@@ -1153,6 +1153,62 @@ _opencode_release_asset() {
     esac
 }
 
+# Find an official-installer binary even when the user's PATH lacks the
+# installer's default directory (e.g. ~/.local/bin/agent while only
+# $CLI_TOOLBOX_HOME/bin is on PATH). Prefer managed locations first
+# (toolbox bin, ~/.local/bin, manifest) so stale PATH entries from other
+# homes cannot shadow the fresh install; fall back to PATH last.
+_find_official_bin() {
+    local cli="$1" p="" info="" mpath=""
+    if [ -x "$CLI_TOOLBOX_HOME/bin/$cli" ] || [ -L "$CLI_TOOLBOX_HOME/bin/$cli" ]; then
+        printf '%s\n' "$CLI_TOOLBOX_HOME/bin/$cli"
+        return 0
+    fi
+    if [ -n "${HOME:-}" ] && { [ -x "$HOME/.local/bin/$cli" ] || [ -L "$HOME/.local/bin/$cli" ]; }; then
+        printf '%s\n' "$HOME/.local/bin/$cli"
+        return 0
+    fi
+    info=$(manifest_lookup "$cli" 2>/dev/null) || info=""
+    if [ -n "$info" ]; then
+        mpath=${info#*$'\t'}
+        mpath=${mpath#*$'\t'}
+        mpath=${mpath#*$'\t'}
+        if [ -n "$mpath" ] && { [ -x "$mpath" ] || [ -L "$mpath" ]; }; then
+            printf '%s\n' "$mpath"
+            return 0
+        fi
+    fi
+    p=$(resolve_path "$cli" 2>/dev/null) || p=""
+    if [ -n "$p" ]; then
+        printf '%s\n' "$p"
+        return 0
+    fi
+    return 1
+}
+
+# Expose an official-installer binary via $CLI_TOOLBOX_HOME/bin so it is
+# runnable when only the toolbox bin is on PATH. Records nothing; caller
+# keeps the manifest pointing at the real install location so delete can
+# remove both the real binary and this symlink (see _delete_manifest_binary).
+_link_toolbox_bin() {
+    local cli="$1" real="$2" link=""
+    link="$CLI_TOOLBOX_HOME/bin/$cli"
+    case "$real" in
+        "$CLI_TOOLBOX_HOME/bin/"*) return 0 ;;
+    esac
+    [ -n "$real" ] || return 0
+    if [ ! -e "$real" ] && [ ! -L "$real" ]; then
+        return 0
+    fi
+    if [ -e "$link" ] || [ -L "$link" ]; then
+        return 0
+    fi
+    mkdir -p "$CLI_TOOLBOX_HOME/bin" || return 0
+    atomic_symlink "$real" "$link" || return 0
+    log_info "${cli}: linked ${link} -> ${real}"
+    return 0
+}
+
 # Run an official install script from a known official URL (see official_installer_url).
 # Always download to a temp file first; never curl|pipe|bash unverified scripts.
 _run_official_installer_script() {
@@ -1161,14 +1217,21 @@ _run_official_installer_script() {
     TB_STATE=error
     TB_DETAIL=""
     _installer_start || return 1
+    _ensure_path_prefix "$CLI_TOOLBOX_HOME/bin"
+    if [ -n "${HOME:-}" ]; then
+        _ensure_path_prefix "$HOME/.local/bin"
+    fi
     local installed="" latest="" ver="" tmp="" path=""
     installed=$(get_installed_version "$cli")
     latest=$(official_installer_latest_version "$cli" 2>/dev/null) || latest=""
     if [ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" = "$latest" ]; then
         TB_STATE=unchanged
         TB_DETAIL="$installed"
-        path=$(resolve_path "$cli") || path=""
-        [ -n "$path" ] && manifest_record "$cli" official-installer "$installed" "$path"
+        path=$(_find_official_bin "$cli") || path=""
+        if [ -n "$path" ]; then
+            _link_toolbox_bin "$cli" "$path"
+            manifest_record "$cli" official-installer "$installed" "$path"
+        fi
         return 0
     fi
     if ! make_tempdir; then
@@ -1192,11 +1255,12 @@ _run_official_installer_script() {
         TB_DETAIL="official installer failed"
         return 1
     fi
-    path=$(resolve_path "$cli") || path=""
+    path=$(_find_official_bin "$cli") || path=""
     if [ -z "$path" ]; then
         TB_DETAIL="installed but binary not found on PATH"
         return 1
     fi
+    _link_toolbox_bin "$cli" "$path"
     ver=$(_parse_version "$cli" "$path")
     if [ -z "$ver" ]; then
         TB_DETAIL="installed but version check failed"
@@ -1265,11 +1329,279 @@ install_opencode() {
     _finish_install opencode "$installed" "$ver"
 }
 
+# ---------------------------------------------------------------------------
+# agent (Cursor Agent CLI) — toolbox-isolated official install.
+# The vendor script hardcodes $HOME/.local/share/cursor-agent and
+# $HOME/.local/bin. Running it with the real HOME would require
+# ~/.local/bin on PATH and pollute the home dir, so cli-toolbox runs it
+# with HOME=$CLI_TOOLBOX_HOME instead: everything lands under
+# $CLI_TOOLBOX_HOME/.local, and only $CLI_TOOLBOX_HOME/bin/agent is exposed.
+# Nothing is written to the real $HOME/.local by installs.
+# ---------------------------------------------------------------------------
+
+_agent_toolbox_root() {
+    printf '%s' "$CLI_TOOLBOX_HOME/.local/share/cursor-agent"
+}
+
+_agent_toolbox_versions_dir() {
+    printf '%s' "$(_agent_toolbox_root)/versions"
+}
+
+# Newest versions/*/cursor-agent in the toolbox store (version-sort aware).
+_agent_latest_toolbox_bin() {
+    local vdir="" d="" best="" bestver="" v=""
+    vdir=$(_agent_toolbox_versions_dir)
+    [ -d "$vdir" ] || return 1
+    for d in "$vdir"/*/cursor-agent; do
+        [ -e "$d" ] || [ -L "$d" ] || continue
+        [ -f "$d" ] || continue
+        v=$(basename "$(dirname "$d")")
+        if [ -z "$best" ]; then
+            best="$d"
+            bestver="$v"
+        elif version_gt "$v" "$bestver"; then
+            best="$d"
+            bestver="$v"
+        fi
+    done
+    [ -n "$best" ] || return 1
+    printf '%s\n' "$best"
+    return 0
+}
+
+# Version embedded in the downloaded official installer script
+# (e.g. .../versions/2026.10.01-e373342/...). Empty when unparseable.
+_agent_installer_version() {
+    local script="$1" ver=""
+    [ -f "$script" ] || return 1
+    ver=$(grep -Eo '[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[A-Za-z0-9]+' "$script" 2>/dev/null | head -1)
+    [ -n "$ver" ] || return 1
+    printf '%s\n' "$ver"
+    return 0
+}
+
+# Point $CLI_TOOLBOX_HOME/bin/agent directly at the resolved versioned
+# binary (never via a ~/.local/bin shim) so only the toolbox bin is needed.
+_agent_link_toolbox_bin() {
+    local target="$1" real="" link=""
+    [ -n "$target" ] || return 1
+    if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+        return 1
+    fi
+    real=$(resolve_real_path "$target" 2>/dev/null) || real="$target"
+    link="$CLI_TOOLBOX_HOME/bin/agent"
+    mkdir -p "$CLI_TOOLBOX_HOME/bin" || return 1
+    rm -f "$link"
+    atomic_symlink "$real" "$link" || return 1
+    log_info "agent: linked ${link} -> ${real}"
+    return 0
+}
+
+# Remove installer-created shims under the toolbox-local .local/bin so the
+# only entry point is $CLI_TOOLBOX_HOME/bin/agent. Real files are kept as a
+# fallback (test fixtures write a real file there); symlinks are removed.
+_agent_cleanup_toolbox_shims() {
+    local shim=""
+    for shim in "$CLI_TOOLBOX_HOME/.local/bin/agent" "$CLI_TOOLBOX_HOME/.local/bin/cursor-agent"; do
+        if [ -L "$shim" ]; then
+            rm -f "$shim"
+            log_info "agent: removed toolbox shim ${shim}"
+        fi
+    done
+    return 0
+}
+
+# Remove legacy official shims under the real $HOME left by previous
+# cli-toolbox releases (which ran the installer with the real HOME).
+# Symlinks into a cursor-agent tree only; never real files, never recursion.
+_agent_cleanup_legacy_home_shims() {
+    local home="${HOME:-}" shim="" real=""
+    [ -n "$home" ] || return 0
+    [ -n "$CLI_TOOLBOX_HOME" ] || return 0
+    if [ "$home/.local/bin/agent" = "$CLI_TOOLBOX_HOME/.local/bin/agent" ]; then
+        return 0
+    fi
+    for shim in "$home/.local/bin/agent" "$home/.local/bin/cursor-agent"; do
+        if [ -L "$shim" ]; then
+            real=$(resolve_real_path "$shim" 2>/dev/null) || real=""
+            case "$real" in
+                *cursor-agent*) rm -f "$shim" && log_info "agent: removed legacy shim ${shim}" ;;
+            esac
+        fi
+    done
+    return 0
+}
+
 install_agent() {
-    local url=""
+    local url="" installed="" iversion="" tmp="" script="" target="" ver="" link=""
+    local store="" backup=""
     url=$(official_installer_url agent)
+    TB_STATE=error
+    TB_DETAIL=""
+    _installer_start || return 1
+    _ensure_path_prefix "$CLI_TOOLBOX_HOME/bin"
     log_warn "agent: official installer does not publish checksums; skipping checksum verification"
-    _run_official_installer_script agent "$url"
+    installed=$(get_installed_version agent)
+    if ! make_tempdir; then
+        TB_DETAIL="cannot create temp directory"
+        return 1
+    fi
+    tmp="$TB_TMPDIR"
+    log_info "agent: downloading installer ${url}"
+    if ! download_file "$url" "$tmp/install.sh"; then
+        TB_DETAIL="download failed (installer)"
+        return 1
+    fi
+    chmod +x "$tmp/install.sh"
+    script="$tmp/install.sh"
+    iversion=$(_agent_installer_version "$script" 2>/dev/null) || iversion=""
+    link="$CLI_TOOLBOX_HOME/bin/agent"
+    # Same version already isolated in the toolbox: nothing to download.
+    # Requires the toolbox store itself (not a legacy $HOME shim) so a
+    # migration from previous releases falls through to a full isolated
+    # install instead of deleting shims the toolbox link still needs.
+    if [ -n "$installed" ] && [ -n "$iversion" ] && [ "$installed" = "$iversion" ] \
+        && { [ -x "$link" ] || [ -L "$link" ]; }; then
+        target=$(_agent_latest_toolbox_bin 2>/dev/null) || target=""
+        if [ -n "$target" ] && _agent_link_toolbox_bin "$target" \
+            && [ -n "$(_parse_version agent "$link" 2>/dev/null)" ]; then
+            _agent_cleanup_toolbox_shims
+            _agent_cleanup_legacy_home_shims
+            # Re-verify: legacy cleanup must never break the toolbox link.
+            if [ -n "$(_parse_version agent "$link" 2>/dev/null)" ]; then
+                TB_STATE=unchanged
+                TB_DETAIL="$installed"
+                manifest_record agent official-installer "$installed" "$link"
+                return 0
+            fi
+        fi
+        # Toolbox store missing or link not self-sufficient: fall through
+        # to a full isolated install (one-time migration).
+    fi
+    # Back up the toolbox store so a failed update keeps the old CLI.
+    store=$(_agent_toolbox_root)
+    if [ -d "$store" ]; then
+        backup="$tmp/agent-backup"
+        if ! mv "$store" "$backup"; then
+            TB_DETAIL="cannot back up existing agent install"
+            return 1
+        fi
+    fi
+    log_info "agent: running official installer (isolated under ${CLI_TOOLBOX_HOME})"
+    if ! env HOME="$CLI_TOOLBOX_HOME" sh "$script" >/dev/null 2>&1; then
+        rm -rf "$store"
+        if [ -n "$backup" ] && [ -d "$backup" ]; then
+            mv "$backup" "$store" || true
+            target=$(_agent_latest_toolbox_bin 2>/dev/null) || target=""
+            [ -n "$target" ] && _agent_link_toolbox_bin "$target" || true
+        fi
+        TB_DETAIL="official installer failed"
+        return 1
+    fi
+    target=$(_agent_latest_toolbox_bin 2>/dev/null) || target=""
+    if [ -z "$target" ] && { [ -x "$CLI_TOOLBOX_HOME/.local/bin/agent" ] || [ -L "$CLI_TOOLBOX_HOME/.local/bin/agent" ]; }; then
+        target="$CLI_TOOLBOX_HOME/.local/bin/agent"
+    fi
+    if [ -z "$target" ]; then
+        rm -rf "$store"
+        if [ -n "$backup" ] && [ -d "$backup" ]; then
+            mv "$backup" "$store" || true
+            target=$(_agent_latest_toolbox_bin 2>/dev/null) || target=""
+            [ -n "$target" ] && _agent_link_toolbox_bin "$target" || true
+        fi
+        TB_DETAIL="installed but agent binary not found in ${store}"
+        return 1
+    fi
+    if ! _agent_link_toolbox_bin "$target"; then
+        rm -rf "$store"
+        if [ -n "$backup" ] && [ -d "$backup" ]; then
+            mv "$backup" "$store" || true
+        fi
+        TB_DETAIL="failed to link agent into ${CLI_TOOLBOX_HOME}/bin"
+        return 1
+    fi
+    _agent_cleanup_toolbox_shims
+    _agent_cleanup_legacy_home_shims
+    ver=$(_parse_version agent "$link")
+    if [ -z "$ver" ]; then
+        rm -f "$link"
+        rm -rf "$store"
+        if [ -n "$backup" ] && [ -d "$backup" ]; then
+            mv "$backup" "$store" || true
+            target=$(_agent_latest_toolbox_bin 2>/dev/null) || target=""
+            [ -n "$target" ] && _agent_link_toolbox_bin "$target" || true
+        fi
+        TB_DETAIL="installed but version check failed"
+        return 1
+    fi
+    if [ -n "$backup" ] && [ -d "$backup" ]; then
+        rm -rf "$backup"
+    fi
+    manifest_record agent official-installer "$ver" "$link"
+    _finish_install agent "$installed" "$ver"
+}
+
+# Delete only cli-toolbox-managed agent artifacts: the toolbox bin link,
+# the toolbox-local store/shims, the manifest entry, and legacy official
+# shims (symlinks only) under the real $HOME. Never touches $HOME
+# recursively, system packages, configs, or credential caches.
+_delete_agent() {
+    local info="" mpath="" store="" shim="" real=""
+    TB_STATE=error
+    TB_DETAIL=""
+    if ! cli_is_toolbox_managed agent && ! manifest_lookup agent >/dev/null 2>&1; then
+        if [ ! -e "$CLI_TOOLBOX_HOME/bin/agent" ] && [ ! -L "$CLI_TOOLBOX_HOME/bin/agent" ] \
+            && [ ! -d "$(_agent_toolbox_root)" ]; then
+            TB_STATE=skipped-not-managed
+            TB_DETAIL="not managed by cli-toolbox"
+            return 0
+        fi
+    fi
+    if manifest_lookup agent >/dev/null 2>&1; then
+        info=$(manifest_lookup agent)
+        mpath=${info#*$'\t'}
+        mpath=${mpath#*$'\t'}
+        mpath=${mpath#*$'\t'}
+        case "$mpath" in
+            "$CLI_TOOLBOX_HOME"/*|"$HOME"/.local/bin/*)
+                if [ -e "$mpath" ] || [ -L "$mpath" ]; then
+                    rm -f "$mpath"
+                fi
+                ;;
+        esac
+    fi
+    _remove_bin_link agent
+    for shim in "$CLI_TOOLBOX_HOME/.local/bin/agent" "$CLI_TOOLBOX_HOME/.local/bin/cursor-agent"; do
+        if [ -e "$shim" ] || [ -L "$shim" ]; then
+            rm -f "$shim"
+        fi
+    done
+    store=$(_agent_toolbox_root)
+    case "$store" in
+        "$CLI_TOOLBOX_HOME"/.local/share/cursor-agent)
+            if [ -d "$store" ]; then
+                rm -rf "$store"
+            fi
+            ;;
+    esac
+    _agent_cleanup_legacy_home_shims
+    # Drop a legacy version dir only if it is empty after shim removal.
+    if [ -n "${HOME:-}" ] && [ "$HOME/.local/bin/agent" != "$CLI_TOOLBOX_HOME/.local/bin/agent" ]; then
+        real="$HOME/.local/share/cursor-agent"
+        if [ -d "$real" ]; then
+            rmdir "$real/versions" 2>/dev/null || true
+            rmdir "$real" 2>/dev/null || true
+        fi
+    fi
+    manifest_remove agent
+    if [ -e "$CLI_TOOLBOX_HOME/bin/agent" ] || [ -L "$CLI_TOOLBOX_HOME/bin/agent" ]; then
+        TB_STATE=error
+        TB_DETAIL="failed to remove managed agent binary"
+        return 1
+    fi
+    TB_STATE=deleted
+    TB_DETAIL="removed managed agent install"
+    return 0
 }
 
 install_claude() {
@@ -1284,13 +1616,20 @@ install_codex() {
     TB_STATE=error
     TB_DETAIL=""
     _installer_start || return 1
+    _ensure_path_prefix "$CLI_TOOLBOX_HOME/bin"
+    if [ -n "${HOME:-}" ]; then
+        _ensure_path_prefix "$HOME/.local/bin"
+    fi
     installed=$(get_installed_version codex)
     latest=$(official_installer_latest_version codex 2>/dev/null) || latest=""
     if [ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" = "$latest" ]; then
         TB_STATE=unchanged
         TB_DETAIL="$installed"
-        path=$(resolve_path codex) || path=""
-        [ -n "$path" ] && manifest_record codex official-installer "$installed" "$path"
+        path=$(_find_official_bin codex) || path=""
+        if [ -n "$path" ]; then
+            _link_toolbox_bin codex "$path"
+            manifest_record codex official-installer "$installed" "$path"
+        fi
         return 0
     fi
     if ! make_tempdir; then
@@ -1310,11 +1649,12 @@ install_codex() {
         TB_DETAIL="official installer failed"
         return 1
     fi
-    path=$(resolve_path codex) || path=""
+    path=$(_find_official_bin codex) || path=""
     if [ -z "$path" ]; then
         TB_DETAIL="installed but binary not found on PATH"
         return 1
     fi
+    _link_toolbox_bin codex "$path"
     ver=$(_parse_version codex "$path")
     if [ -z "$ver" ]; then
         TB_DETAIL="installed but version check failed"
@@ -1625,7 +1965,8 @@ run_uninstaller() {
             ;;
         coscli | kubectl | helm) _delete_release_binary "$name" ;;
         oci) _delete_oci ;;
-        agent | claude | codex | agy) _delete_manifest_binary "$name" ;;
+        agent) _delete_agent ;;
+        claude | codex | agy) _delete_manifest_binary "$name" ;;
         codebuddy)
             provider=$(resolve_provider codebuddy "${TB_OS:-linux}")
             if [ "$provider" = "brew" ]; then
