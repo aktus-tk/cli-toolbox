@@ -76,3 +76,15 @@ CLIを追加・削除するときは、`docs/adding-cli.md`のチェックリス
 shellcheck cli-toolbox.sh lib/*.sh tests/*.sh
 bash tests/test.sh
 ```
+
+## Cursor Cloud specific instructions
+
+常駐サービスはない。依存関係の導入は `sudo apt-get update -qq` のあと `sudo apt-get install -y shellcheck` である。`shellcheck` はベースイメージに含まれない。
+
+`bash tests/test.sh` はオフラインで、導入先を一時ディレクトリに向ける。実 `$HOME` の CLI と認証情報は変更しない。
+
+`./cli-toolbox.sh install` は公式レジストリへ接続し、既定では `~/.cli-toolbox` に書く。実ホームを避けて確認するときは `CLI_TOOLBOX_HOME` を一時ディレクトリにする。GitHub API がレート制限したときは `GITHUB_TOKEN` を渡せる。値はログに出さない。テスト自体にトークンは不要。
+
+このイメージでは `unzip` と `python3` が `/usr/bin` にある。`extract_archive zip without unzip` は、`unzip` があるディレクトリを PATH から外すため、その状態だと python3 フォールバックに必要なコマンドも見えず失敗する。`unzip` パッケージは残す。
+
+`shellcheck` は既存の warning（SC2034 など）で終了コード 1 になる。GitHub Actions の `test` ジョブと同じである。
